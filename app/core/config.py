@@ -1,6 +1,6 @@
 
 from pathlib import Path
-
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
+    allowed_scan_roots: list[str] = Field(default_factory=list)
 
 # Shared application settings
 settings = Settings()
