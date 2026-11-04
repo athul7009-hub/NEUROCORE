@@ -1,8 +1,8 @@
-
+import json
 import pytest
 from unittest.mock import patch
 from uuid import uuid4
-
+from app.core.communication_audit import CommunicationAudit
 from app.agents.base_agent import BaseAgent
 from app.agents.planning_agent import PlanningAgent
 from app.agents.coordinator import Coordinator
@@ -218,3 +218,125 @@ def test_coordinator_rejects_malicious_agent_responses(
     assert response.message_type == MessageType.ERROR
     assert expected_error in response.payload["error"].lower()
     assert response.signature is None
+
+
+def test_coordinator_audits_accepted_communication(tmp_path):
+    audit_path = tmp_path / "communication_audit.jsonl"
+
+    registry = AgentRegistry()
+    registry.register(FileAnalysisAgent())
+
+    coordinator = create_coordinator(registry)
+    coordinator.communication_audit = CommunicationAudit(audit_path)
+
+    with patch("app.agents.file_analysis_agent.run_scan") as mock_scan:
+        mock_scan.return_value = {
+            "root": "D:/Projects/Demo",
+            "total_files": 0,
+            "total_size_bytes": 0,
+            "extension_counts": {},
+            "duplicates": [],
+            "recoverable_bytes": 0,
+            "scan_warnings": [],
+            "hash_skipped": [],
+            "files": [],
+        }
+
+        task = TaskRequest(
+            user_input="Analyze my project",
+            intent=TaskIntent.FILE_ANALYSIS,
+            parameters={"directory": "D:/Projects/Demo"},
+        )
+
+        response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.RESULT
+    assert audit_path.exists()
+
+    records = audit_path.read_text(encoding="utf-8").splitlines()
+
+    assert len(records) == 1
+
+    record = json.loads(records[0])
+
+    assert record["outcome"] == "accepted"
+    assert record["sender"] == "Coordinator"
+    assert record["recipient"] == "FileAnalysisAgent"
+    assert record["shared_fields"] == ["directory"]
+
+
+def test_coordinator_audits_rejected_communication(tmp_path):
+    audit_path = tmp_path / "communication_audit.jsonl"
+
+    registry = AgentRegistry()
+    registry.register(FileAnalysisAgent())
+
+    coordinator = create_coordinator(registry)
+    coordinator.communication_audit = CommunicationAudit(audit_path)
+
+    # Simulate a policy that does not permit the directory field.
+    coordinator.communication_policy.allowed_fields[
+        "FileAnalysisAgent"
+    ] = {"unauthorized_field"}
+
+    task = TaskRequest(
+        user_input="Analyze my project",
+        intent=TaskIntent.FILE_ANALYSIS,
+        parameters={"directory": "D:/Projects/Demo"},
+    )
+
+    response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.ERROR
+    assert audit_path.exists()
+
+    records = audit_path.read_text(encoding="utf-8").splitlines()
+
+    assert len(records) == 1
+
+    record = json.loads(records[0])
+
+    assert record["outcome"] == "rejected"
+    assert record["recipient"] == "FileAnalysisAgent"
+    assert "Unauthorized payload fields" in record["reason"]
+
+
+def test_coordinator_audit_does_not_store_payload_values(tmp_path):
+    audit_path = tmp_path / "communication_audit.jsonl"
+
+    registry = AgentRegistry()
+    registry.register(FileAnalysisAgent())
+
+    coordinator = create_coordinator(registry)
+    coordinator.communication_audit = CommunicationAudit(audit_path)
+
+    private_directory = "D:/Private/NEUROCORE_SECRET_FOLDER"
+
+    with patch("app.agents.file_analysis_agent.run_scan") as mock_scan:
+        mock_scan.return_value = {
+            "root": private_directory,
+            "total_files": 0,
+            "total_size_bytes": 0,
+            "extension_counts": {},
+            "duplicates": [],
+            "recoverable_bytes": 0,
+            "scan_warnings": [],
+            "hash_skipped": [],
+            "files": [],
+        }
+
+        task = TaskRequest(
+            user_input="Analyze my project",
+            intent=TaskIntent.FILE_ANALYSIS,
+            parameters={"directory": private_directory},
+        )
+
+        response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.RESULT
+
+    audit_content = audit_path.read_text(encoding="utf-8")
+
+    assert private_directory not in audit_content
+    assert "directory" in audit_content
+    assert "accepted" in audit_content

@@ -1,3 +1,4 @@
+from app.core.communication_audit import CommunicationAudit
 from app.core.communication_policy import CommunicationPolicy
 from app.agents.registry import AgentRegistry
 from app.core.agent_auth import AgentAuthenticator
@@ -18,6 +19,7 @@ class Coordinator:
         self.registry = registry
         self.authenticator = authenticator
         self.communication_policy = CommunicationPolicy()
+        self.communication_audit = CommunicationAudit()
 
         self.routes = {
             TaskIntent.FILE_ANALYSIS: "FileAnalysisAgent",
@@ -63,9 +65,27 @@ class Coordinator:
                 message_type=MessageType.TASK,
                 payload=payload,
             )
-            self.communication_policy.validate_outgoing(request)
-            response = agent.process(request)
+             # Enforce selective communication policy.
+                        # Enforce selective communication policy.
+            try:
+                self.communication_policy.validate_outgoing(request)
 
+            except ValueError as error:
+                self.communication_audit.record(
+                    request,
+                    outcome="rejected",
+                    reason=str(error),
+                )
+                raise
+
+            # Record policy-approved outgoing communication.
+            self.communication_audit.record(
+                request,
+                outcome="accepted",
+            )
+
+            # Deliver the validated request to the agent.
+            response = agent.process(request)
             # Validate the response against the registered agent.
             if response.sender != agent_name:
                 raise ValueError("Agent identity mismatch.")
