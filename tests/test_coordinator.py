@@ -1,4 +1,5 @@
 
+import pytest
 from unittest.mock import patch
 
 from app.agents.coordinator import Coordinator
@@ -60,3 +61,52 @@ def test_coordinator_rejects_missing_directory():
     assert response.sender == "Coordinator"
     assert response.message_type == MessageType.ERROR
     assert "directory" in response.payload["error"].lower()
+
+
+@pytest.mark.parametrize("directory", ["", "   ", None, 123])
+def test_coordinator_rejects_invalid_directory(directory):
+    coordinator = Coordinator(AgentRegistry())
+
+    task = TaskRequest(
+        user_input="Analyze my project",
+        intent=TaskIntent.FILE_ANALYSIS,
+        parameters={"directory": directory},
+    )
+
+    response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.ERROR
+    assert "directory" in response.payload["error"].lower()
+
+
+def test_coordinator_rejects_unregistered_agent():
+    coordinator = Coordinator(AgentRegistry())
+
+    task = TaskRequest(
+        user_input="Analyze my project",
+        intent=TaskIntent.FILE_ANALYSIS,
+        parameters={"directory": "D:/Projects/Demo"},
+    )
+
+    response = coordinator.handle_task(task)
+
+    assert response.sender == "Coordinator"
+    assert response.message_type == MessageType.ERROR
+    assert "not registered" in response.payload["error"].lower()
+
+
+def test_coordinator_rejects_unconfigured_route():
+    coordinator = Coordinator(AgentRegistry())
+    coordinator.routes.pop(TaskIntent.FILE_ANALYSIS)
+
+    task = TaskRequest(
+        user_input="Analyze my project",
+        intent=TaskIntent.FILE_ANALYSIS,
+        parameters={"directory": "D:/Projects/Demo"},
+    )
+
+    response = coordinator.handle_task(task)
+
+    assert response.sender == "Coordinator"
+    assert response.message_type == MessageType.ERROR
+    assert "unsupported task intent" in response.payload["error"].lower()
