@@ -53,6 +53,7 @@ class TaskRequest(BaseModel):
 
     task_id: UUID = Field(default_factory=uuid4)
     user_input: str = Field(min_length=1, max_length=5000)
+    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=current_timestamp)
 
 
@@ -73,6 +74,10 @@ class AgentMessage(BaseModel):
 
     payload: dict[str, Any] = Field(default_factory=dict)
 
+    in_reply_to: UUID | None = None
+
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
     created_at: datetime = Field(default_factory=current_timestamp)
 
     priority: int = Field(default=5, ge=1, le=10)
@@ -90,6 +95,7 @@ class AgentMessage(BaseModel):
 
 class ToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
 
     action_id: UUID = Field(default_factory=uuid4)
 

@@ -36,10 +36,29 @@ def test_agent_message():
     assert message.task_id == task_id
     assert message.payload["files_found"] == 15
     assert message.priority == 5
+    assert message.in_reply_to is None
+    assert message.metadata == {}
 
     print("PASS: AgentMessage")
 
+def test_agent_message_reply():
+    task_id = uuid4()
+    original_message_id = uuid4()
 
+    reply = AgentMessage(
+        task_id=task_id,
+        sender="PlanningAgent",
+        recipient="Coordinator",
+        message_type=MessageType.RESULT,
+        payload={"plan": "Analyze project dependencies"},
+        in_reply_to=original_message_id,
+        metadata={"channel": "internal"},
+    )
+
+    assert reply.in_reply_to == original_message_id
+    assert reply.metadata["channel"] == "internal"
+
+    print("PASS: Agent message reply and metadata")
 def test_tool_request():
     action = ToolRequest(
         tool_name="file_scanner",
@@ -84,5 +103,5 @@ if __name__ == "__main__":
     test_tool_request()
     test_tool_result()
     test_invalid_task()
-
+    test_agent_message_reply()
     print("\nAll schema tests passed!")
