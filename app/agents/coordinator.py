@@ -12,9 +12,9 @@ class Coordinator:
     def __init__(self, registry: AgentRegistry):
         self.registry = registry
 
-        # Maps supported task intents to their responsible agents.
         self.routes = {
             TaskIntent.FILE_ANALYSIS: "FileAnalysisAgent",
+            TaskIntent.PLAN_TASK: "PlanningAgent",
         }
 
     def handle_task(self, task: TaskRequest) -> AgentMessage:
@@ -26,12 +26,18 @@ class Coordinator:
                     f"Unsupported task intent: {task.intent}"
                 )
 
-            directory = task.parameters.get("directory")
+            if task.intent == TaskIntent.FILE_ANALYSIS:
+                directory = task.parameters.get("directory")
 
-            if not isinstance(directory, str) or not directory.strip():
-                raise ValueError(
-                    "A valid directory parameter is required."
-                )
+                if not isinstance(directory, str) or not directory.strip():
+                    raise ValueError(
+                        "A valid directory parameter is required."
+                    )
+
+                payload = {"directory": directory}
+
+            elif task.intent == TaskIntent.PLAN_TASK:
+                payload = {"objective": task.user_input}
 
             agent = self.registry.get(agent_name)
 
@@ -40,7 +46,7 @@ class Coordinator:
                 sender="Coordinator",
                 recipient=agent_name,
                 message_type=MessageType.TASK,
-                payload={"directory": directory},
+                payload=payload,
             )
 
             return agent.process(message)

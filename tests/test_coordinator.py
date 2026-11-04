@@ -1,7 +1,7 @@
 
 import pytest
 from unittest.mock import patch
-
+from app.agents.planning_agent import PlanningAgent
 from app.agents.coordinator import Coordinator
 from app.agents.registry import AgentRegistry
 from app.agents.file_analysis_agent import FileAnalysisAgent
@@ -110,3 +110,23 @@ def test_coordinator_rejects_unconfigured_route():
     assert response.sender == "Coordinator"
     assert response.message_type == MessageType.ERROR
     assert "unsupported task intent" in response.payload["error"].lower()
+def test_coordinator_routes_planning_task():
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    coordinator = Coordinator(registry)
+
+    task = TaskRequest(
+        user_input="Create a plan to analyze my project",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    response = coordinator.handle_task(task)
+
+    assert response.sender == "PlanningAgent"
+    assert response.recipient == "Coordinator"
+    assert response.task_id == task.task_id
+    assert response.message_type == MessageType.RESULT
+
+    assert response.payload["objective"] == task.user_input
+    assert len(response.payload["steps"]) == 5

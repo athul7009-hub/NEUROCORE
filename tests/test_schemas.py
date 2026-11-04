@@ -1,6 +1,6 @@
 
 from uuid import uuid4
-
+import pytest
 from pydantic import ValidationError
 
 from app.core.schemas import (
@@ -96,3 +96,30 @@ def test_tool_result():
 
     assert result.action_id == action_id
     assert result.success is True
+
+
+from app.core.schemas import TaskPlan
+
+
+def test_task_plan():
+    plan = TaskPlan(
+        task_id=uuid4(),
+        objective="Analyze project files",
+        steps=[
+            "Validate the project directory",
+            "Scan approved files",
+            "Summarize scan results",
+        ],
+    )
+
+    assert len(plan.steps) == 3
+    assert plan.requires_approval is True
+
+
+def test_task_plan_rejects_empty_steps():
+    with pytest.raises(ValidationError):
+        TaskPlan(
+            task_id=uuid4(),
+            objective="Analyze project files",
+            steps=[],
+        )

@@ -23,6 +23,7 @@ class MessageType(str, Enum):
 
 class TaskIntent(str, Enum):
     FILE_ANALYSIS = "file_analysis"
+    PLAN_TASK = "plan_task"
 
 class ToolStatus(str, Enum):
     PROPOSED = "proposed"
@@ -59,6 +60,15 @@ class TaskRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=current_timestamp)
 
+
+class TaskPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: UUID
+    objective: str = Field(min_length=1)
+    steps: list[str] = Field(min_length=1)
+    requires_approval: bool = True
+    created_at: datetime = Field(default_factory=current_timestamp)
 
 # -------------------------------
 # Agent communication schema
