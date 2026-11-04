@@ -1,6 +1,6 @@
 
 from pathlib import Path
-from pydantic import Field
+from pydantic import Field,SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     """
     Central configuration manager for NEUROCORE.
     """
-
+    file_analysis_agent_key: SecretStr = SecretStr("")
+    planning_agent_key: SecretStr = SecretStr("")
+    verification_agent_key: SecretStr = SecretStr("")
     app_name: str = "NEUROCORE"
     app_version: str = "0.1.0"
     environment: str = "development"

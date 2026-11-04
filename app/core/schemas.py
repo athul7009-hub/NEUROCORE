@@ -76,7 +76,7 @@ class TaskPlan(BaseModel):
 
 class AgentMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
+    signature: str | None = None
     message_id: UUID = Field(default_factory=uuid4)
     task_id: UUID
 
