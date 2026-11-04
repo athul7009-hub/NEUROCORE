@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.core.schemas import (
     TaskRequest,
+    TaskIntent,
     AgentMessage,
     ToolRequest,
     ToolResult,
@@ -14,12 +15,27 @@ from app.core.schemas import (
 
 
 def test_task_request():
-    task = TaskRequest(user_input="Analyze my project folder")
+    task = TaskRequest(
+        user_input="Analyze my project folder",
+        intent=TaskIntent.FILE_ANALYSIS,
+    )
 
     assert task.user_input == "Analyze my project folder"
     assert task.task_id is not None
+    assert task.intent == TaskIntent.FILE_ANALYSIS
+    assert task.parameters == {}
 
-    print("PASS: TaskRequest")
+
+def test_invalid_task():
+    try:
+        TaskRequest(
+            user_input="",
+            intent=TaskIntent.FILE_ANALYSIS,
+        )
+    except ValidationError:
+        return
+
+    raise AssertionError("Empty task was incorrectly accepted")
 
 
 def test_agent_message():
@@ -39,7 +55,6 @@ def test_agent_message():
     assert message.in_reply_to is None
     assert message.metadata == {}
 
-    print("PASS: AgentMessage")
 
 def test_agent_message_reply():
     task_id = uuid4()
@@ -58,7 +73,7 @@ def test_agent_message_reply():
     assert reply.in_reply_to == original_message_id
     assert reply.metadata["channel"] == "internal"
 
-    print("PASS: Agent message reply and metadata")
+
 def test_tool_request():
     action = ToolRequest(
         tool_name="file_scanner",
@@ -67,8 +82,6 @@ def test_tool_request():
 
     assert action.requires_approval is True
     assert action.dry_run is True
-
-    print("PASS: ToolRequest")
 
 
 def test_tool_result():
@@ -83,25 +96,3 @@ def test_tool_result():
 
     assert result.action_id == action_id
     assert result.success is True
-
-    print("PASS: ToolResult")
-
-
-def test_invalid_task():
-    try:
-        TaskRequest(user_input="")
-    except ValidationError:
-        print("PASS: Invalid task rejected")
-        return
-
-    raise AssertionError("Empty task was incorrectly accepted")
-
-
-if __name__ == "__main__":
-    test_task_request()
-    test_agent_message()
-    test_tool_request()
-    test_tool_result()
-    test_invalid_task()
-    test_agent_message_reply()
-    print("\nAll schema tests passed!")

@@ -21,6 +21,8 @@ class MessageType(str, Enum):
     RESULT = "result"
     ERROR = "error"
 
+class TaskIntent(str, Enum):
+    FILE_ANALYSIS = "file_analysis"
 
 class ToolStatus(str, Enum):
     PROPOSED = "proposed"
@@ -53,6 +55,7 @@ class TaskRequest(BaseModel):
 
     task_id: UUID = Field(default_factory=uuid4)
     user_input: str = Field(min_length=1, max_length=5000)
+    intent: TaskIntent
     parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=current_timestamp)
 

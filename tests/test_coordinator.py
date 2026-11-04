@@ -1,9 +1,15 @@
+
 from unittest.mock import patch
 
 from app.agents.coordinator import Coordinator
 from app.agents.registry import AgentRegistry
 from app.agents.file_analysis_agent import FileAnalysisAgent
-from app.core.schemas import TaskRequest, MessageType
+
+from app.core.schemas import (
+    TaskRequest,
+    TaskIntent,
+    MessageType,
+)
 
 
 @patch("app.agents.file_analysis_agent.run_scan")
@@ -27,6 +33,7 @@ def test_coordinator_delegates_task(mock_scan):
 
     task = TaskRequest(
         user_input="Analyze my project",
+        intent=TaskIntent.FILE_ANALYSIS,
         parameters={"directory": "D:/Projects/Demo"},
     )
 
@@ -43,7 +50,10 @@ def test_coordinator_delegates_task(mock_scan):
 def test_coordinator_rejects_missing_directory():
     coordinator = Coordinator(AgentRegistry())
 
-    task = TaskRequest(user_input="Analyze my project")
+    task = TaskRequest(
+        user_input="Analyze my project",
+        intent=TaskIntent.FILE_ANALYSIS,
+    )
 
     response = coordinator.handle_task(task)
 
