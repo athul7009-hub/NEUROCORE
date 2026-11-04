@@ -1,4 +1,4 @@
-
+from app.core.communication_policy import CommunicationPolicy
 from app.agents.registry import AgentRegistry
 from app.core.agent_auth import AgentAuthenticator
 from app.core.schemas import (
@@ -17,6 +17,7 @@ class Coordinator:
     ):
         self.registry = registry
         self.authenticator = authenticator
+        self.communication_policy = CommunicationPolicy()
 
         self.routes = {
             TaskIntent.FILE_ANALYSIS: "FileAnalysisAgent",
@@ -62,7 +63,7 @@ class Coordinator:
                 message_type=MessageType.TASK,
                 payload=payload,
             )
-
+            self.communication_policy.validate_outgoing(request)
             response = agent.process(request)
 
             # Validate the response against the registered agent.
