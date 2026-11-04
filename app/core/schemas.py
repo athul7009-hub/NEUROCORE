@@ -29,6 +29,20 @@ class ToolStatus(str, Enum):
     EXECUTED = "executed"
     FAILED = "failed"
 
+class OperationAction(str, Enum):
+    CREATE = "create"
+    COPY = "copy"
+    RENAME = "rename"
+    QUARANTINE = "quarantine"
+    RESTORE = "restore"
+
+class OperationStatus(str, Enum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXECUTED = "executed"
+    FAILED = "failed"
+
 
 # -------------------------------
 # Incoming task schema
@@ -105,3 +119,26 @@ class ToolResult(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
     completed_at: datetime = Field(default_factory=current_timestamp)
+
+
+
+class OperationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: UUID = Field(default_factory=uuid4)
+    task_id: UUID
+    action: OperationAction
+
+    source_path: str | None = None
+    destination_path: str
+
+    # Quarantine management
+    approved_root: str | None = None
+    related_operation_id: UUID | None = None
+
+    status: OperationStatus = OperationStatus.PROPOSED
+    dry_run: bool = True
+    requires_approval: bool = True
+
+    created_at: datetime = Field(default_factory=current_timestamp)
+    rollback_data: dict[str, Any] = Field(default_factory=dict)
