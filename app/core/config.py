@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:8b"
 
     log_level: str = "INFO"
+    database_path: Path = PROJECT_ROOT / "data" / "neurocore.db"
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",

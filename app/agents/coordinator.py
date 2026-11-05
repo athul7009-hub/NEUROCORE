@@ -8,19 +8,27 @@ from app.core.schemas import (
     TaskIntent,
     TaskRequest,
 )
+import logging
+from app.memory.manager import MemoryManager
+from app.memory.schemas import (
+    EpisodicMemoryRecord,
+    MemoryStatus,
+)
 
+logger = logging.getLogger(__name__)
 
 class Coordinator:
     def __init__(
         self,
         registry: AgentRegistry,
         authenticator: AgentAuthenticator,
+        memory_manager: MemoryManager | None = None,
     ):
         self.registry = registry
         self.authenticator = authenticator
         self.communication_policy = CommunicationPolicy()
         self.communication_audit = CommunicationAudit()
-
+        self.memory_manager = memory_manager
         self.routes = {
             TaskIntent.FILE_ANALYSIS: "FileAnalysisAgent",
             TaskIntent.PLAN_TASK: "PlanningAgent",
@@ -115,6 +123,8 @@ class Coordinator:
             if not self.authenticator.verify(signed_response):
                 raise ValueError("Agent response authentication failed.")
 
+            self._remember_task(task, agent_name, signed_response)
+
             return signed_response
 
         except ValueError as error:
@@ -124,4 +134,73 @@ class Coordinator:
                 recipient="User",
                 message_type=MessageType.ERROR,
                 payload={"error": str(error)},
+            )
+    def _remember_task(
+        self,
+        task: TaskRequest,
+        agent_name: str,
+        response: AgentMessage,
+    ) -> None:
+        if self.memory_manager is None:
+            return
+
+        if response.message_type == MessageType.ERROR:
+            status = MemoryStatus.FAILED
+            summary = f"{agent_name} task failed."
+
+        elif response.message_type == MessageType.RESULT:
+            status = MemoryStatus.COMPLETED
+
+            if agent_name == "FileAnalysisAgent":
+                total_files = response.payload.get("total_files")
+                duplicate_groups = response.payload.get("duplicate_groups")
+
+                if (
+                    type(total_files) is not int
+                    or total_files < 0
+                    or type(duplicate_groups) is not int
+                    or duplicate_groups < 0
+                ):
+                    return
+
+                summary = (
+                    f"File analysis completed: {total_files} files scanned; "
+                    f"{duplicate_groups} duplicate groups found."
+                )
+
+            elif agent_name == "PlanningAgent":
+                steps = response.payload.get("steps")
+
+                if (
+                    not isinstance(steps, list)
+                    or not all(isinstance(step, str) for step in steps)
+                ):
+                    return
+
+                summary = (
+                    f"Planning completed: generated a plan "
+                    f"with {len(steps)} steps."
+                )
+
+            else:
+                return
+
+        else:
+            return
+
+        record = EpisodicMemoryRecord(
+            task_id=task.task_id,
+            intent=task.intent.value,
+            status=status,
+            agent_name=agent_name,
+            summary=summary,
+            created_at=task.created_at,
+        )
+
+        try:
+            self.memory_manager.remember_task(record)
+        except Exception:
+            logger.warning(
+                "Task memory could not be persisted; "
+                "the agent response will still be returned."
             )
