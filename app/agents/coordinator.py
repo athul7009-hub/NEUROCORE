@@ -1,6 +1,7 @@
 
 import logging
 import sqlite3
+from uuid import UUID
 
 from app.agents.registry import AgentRegistry
 from app.core.agent_auth import AgentAuthenticator
@@ -14,15 +15,19 @@ from app.core.schemas import (
 )
 from app.memory.context_builder import MemoryContextBuilder
 from app.memory.manager import MemoryManager
+from app.memory.retention_policy import RetentionAssessment
 from app.memory.schemas import (
     EpisodicMemoryRecord,
     MemoryStatus,
 )
 
+
 logger = logging.getLogger(__name__)
 
 
 class Coordinator:
+    """Coordinates agent execution and controlled memory operations."""
+
     def __init__(
         self,
         registry: AgentRegistry,
@@ -46,7 +51,111 @@ class Coordinator:
             TaskIntent.PLAN_TASK: "PlanningAgent",
         }
 
+    def assess_memory_retention(
+        self,
+        limit: int = 100,
+    ) -> list[tuple[EpisodicMemoryRecord, RetentionAssessment]]:
+        """Return retention assessments for coordinator review."""
+
+        if self.memory_manager is None:
+            return []
+
+        assessments = self.memory_manager.assess_retention(
+            requesting_agent="CoordinatorAgent",
+            limit=limit,
+        )
+
+        eligible_count = sum(
+            assessment.eligible
+            for _, assessment in assessments
+        )
+
+        logger.info(
+            "Memory retention assessment completed: "
+            "%d records reviewed, %d eligible for archival.",
+            len(assessments),
+            eligible_count,
+        )
+
+        return assessments
+
+    def archive_memory(self, task_id: UUID) -> bool:
+        """Archive an eligible memory through an explicit coordinator request."""
+
+        if self.memory_manager is None:
+            raise RuntimeError("Memory manager is not initialized.")
+
+        logger.info(
+            "Memory archival requested for task %s.",
+            task_id,
+        )
+
+        try:
+            archived = self.memory_manager.archive_task(
+                task_id,
+                requesting_agent="CoordinatorAgent",
+            )
+
+            if archived:
+                logger.info(
+                    "Memory successfully archived for task %s.",
+                    task_id,
+                )
+            else:
+                logger.warning(
+                    "Memory archival was not completed for task %s.",
+                    task_id,
+                )
+
+            return archived
+
+        except Exception:
+            logger.exception(
+                "Memory archival failed for task %s.",
+                task_id,
+            )
+            raise
+
+    def restore_memory(self, task_id: UUID) -> bool:
+        """Restore an archived memory through an explicit coordinator request."""
+
+        if self.memory_manager is None:
+            raise RuntimeError("Memory manager is not initialized.")
+
+        logger.info(
+            "Memory restoration requested for task %s.",
+            task_id,
+        )
+
+        try:
+            restored = self.memory_manager.restore_task(
+                task_id,
+                requesting_agent="CoordinatorAgent",
+            )
+
+            if restored:
+                logger.info(
+                    "Memory successfully restored for task %s.",
+                    task_id,
+                )
+            else:
+                logger.warning(
+                    "Memory restoration was not completed for task %s.",
+                    task_id,
+                )
+
+            return restored
+
+        except Exception:
+            logger.exception(
+                "Memory restoration failed for task %s.",
+                task_id,
+            )
+            raise
+
     def handle_task(self, task: TaskRequest) -> AgentMessage:
+        """Routes, executes, verifies, and records an agent task."""
+
         agent_name = None
 
         try:
@@ -115,7 +224,6 @@ class Coordinator:
                     "Agent response authentication failed."
                 )
 
-            # Planning results must pass verification before acceptance.
             if (
                 task.intent == TaskIntent.PLAN_TASK
                 and signed_response.message_type == MessageType.RESULT
@@ -165,12 +273,13 @@ class Coordinator:
 
             return failure
 
-    
     def _build_memory_context(
         self,
         task: TaskRequest,
         recipient_agent: str,
-        ):
+    ):
+        """Builds authorized memory context without blocking normal execution."""
+
         if self.memory_context_builder is None:
             return None
 
@@ -179,7 +288,7 @@ class Coordinator:
                 task.user_input
                 if task.intent == TaskIntent.PLAN_TASK
                 else None
-        )
+            )
 
             return self.memory_context_builder.build_context(
                 task_id=task.task_id,
@@ -189,16 +298,17 @@ class Coordinator:
             )
 
         except PermissionError:
-                raise
+            raise
 
         except sqlite3.Error:
             logger.warning(
-            "Memory database unavailable; proceeding without context."
+                "Memory database unavailable; proceeding without context."
             )
             return None
 
-
     def _send_request(self, request: AgentMessage) -> None:
+        """Validates and audits outgoing agent communication."""
+
         try:
             self.communication_policy.validate_outgoing(request)
 
@@ -222,6 +332,8 @@ class Coordinator:
         expected_task_id,
         expected_message_id,
     ) -> None:
+        """Validates agent identity and response correlation."""
+
         if response.sender != expected_sender:
             raise ValueError("Agent identity mismatch.")
 
@@ -245,6 +357,8 @@ class Coordinator:
         task: TaskRequest,
         planning_response: AgentMessage,
     ) -> None:
+        """Requires independent verification before accepting a plan."""
+
         verification_agent_name = "VerificationAgent"
 
         verification_agent = self.registry.get(
@@ -300,9 +414,7 @@ class Coordinator:
         report = signed_verification.payload
 
         if not isinstance(report, dict):
-            raise ValueError(
-                "Invalid verification report."
-            )
+            raise ValueError("Invalid verification report.")
 
         if type(report.get("valid")) is not bool:
             raise ValueError(
@@ -336,6 +448,8 @@ class Coordinator:
         task: TaskRequest,
         error: str,
     ) -> AgentMessage:
+        """Creates a controlled error response for the user."""
+
         return AgentMessage(
             task_id=task.task_id,
             sender="Coordinator",
@@ -350,6 +464,8 @@ class Coordinator:
         agent_name: str,
         response: AgentMessage,
     ) -> None:
+        """Persists a concise task outcome without storing raw payloads."""
+
         if self.memory_manager is None:
             return
 

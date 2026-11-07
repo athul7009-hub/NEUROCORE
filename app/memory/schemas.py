@@ -1,8 +1,14 @@
+
 from datetime import datetime, timezone
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 
 
 class MemoryStatus(str, Enum):
@@ -56,3 +62,22 @@ class EpisodicMemoryRecord(BaseModel):
     usage_tracked: bool = True
 
     is_protected: bool = False
+
+    @model_validator(mode="after")
+    def validate_lifecycle_consistency(self):
+        if self.lifecycle_status == MemoryLifecycleStatus.ARCHIVED:
+            if self.archived_at is None:
+                raise ValueError(
+                    "Archived memories must have archived_at."
+                )
+        elif self.archived_at is not None:
+            raise ValueError(
+                "Active memories cannot have archived_at."
+            )
+
+        if not self.usage_tracked and self.use_count > 0:
+            raise ValueError(
+                "Untracked usage cannot have a positive use count."
+            )
+
+        return self

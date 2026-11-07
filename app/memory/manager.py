@@ -1,7 +1,6 @@
 
 from uuid import UUID
 
-from app.core.config import settings
 from app.memory.memory_policy import MemoryPolicy
 from app.memory.repositories.episodic_memory import (
     EpisodicMemoryRepository,
@@ -12,6 +11,7 @@ from app.memory.retention_policy import (
 )
 from app.memory.schemas import (
     EpisodicMemoryRecord,
+    MemoryLifecycleStatus,
     MemorySensitivity,
     MemorySource,
     MemoryStatus,
@@ -59,8 +59,16 @@ class MemoryManager:
         sensitivity: MemorySensitivity = MemorySensitivity.INTERNAL,
         source: MemorySource = MemorySource.COORDINATOR,
     ) -> None:
+        """Stores a new active memory after policy validation."""
+
         if not isinstance(record, EpisodicMemoryRecord):
             raise TypeError("Expected an EpisodicMemoryRecord.")
+
+        if (
+            record.lifecycle_status != MemoryLifecycleStatus.ACTIVE
+            or record.archived_at is not None
+        ):
+            raise ValueError("New memories must have an active lifecycle.")
 
         if not self.policy.evaluate(record, sensitivity, source):
             raise ValueError("Memory record rejected by storage policy.")
@@ -213,11 +221,6 @@ class MemoryManager:
             raise ValueError(
                 "Memory is not eligible for archival: "
                 + "; ".join(assessment.reasons)
-            )
-
-        if not settings.memory_automatic_archival_enabled:
-            raise PermissionError(
-                "Archival execution is disabled by configuration."
             )
 
         return self.repository.archive(task_id)

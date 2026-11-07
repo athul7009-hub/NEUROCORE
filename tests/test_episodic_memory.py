@@ -394,7 +394,7 @@ def test_normal_retrieval_excludes_archived_memory(repository):
         connection.execute(
             """
             UPDATE episodic_memory
-            SET lifecycle_status = ?
+            SET lifecycle_status = ?, archived_at = CURRENT_TIMESTAMP
             WHERE task_id = ?
             """,
             (
@@ -411,4 +411,6 @@ def test_normal_retrieval_excludes_archived_memory(repository):
     )
 
     assert archived is not None
+    assert archived.task_id == record.task_id
     assert archived.lifecycle_status == MemoryLifecycleStatus.ARCHIVED
+    assert archived.archived_at is not None

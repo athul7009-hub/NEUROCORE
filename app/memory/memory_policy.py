@@ -68,10 +68,13 @@ class MemoryPolicy:
         if requesting_agent not in self.TRUSTED_AGENTS:
             return False
 
-        return record.sensitivity in {
-            MemorySensitivity.PUBLIC,
-            MemorySensitivity.INTERNAL,
-        }
+        return (
+            record.lifecycle_status == MemoryLifecycleStatus.ACTIVE
+            and record.sensitivity in {
+                MemorySensitivity.PUBLIC,
+                MemorySensitivity.INTERNAL,
+            }
+        )
     def evaluate_archived_retrieval(
         self,
         record: EpisodicMemoryRecord,

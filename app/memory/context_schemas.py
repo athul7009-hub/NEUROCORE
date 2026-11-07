@@ -1,9 +1,13 @@
 
-from uuid import UUID
 from datetime import datetime
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.memory.schemas import MemoryStatus
+from app.memory.schemas import (
+    MemoryLifecycleStatus,
+    MemoryStatus,
+)
 
 
 class MemoryContextItem(BaseModel):
@@ -17,6 +21,9 @@ class MemoryContextItem(BaseModel):
     agent_name: str = Field(min_length=1)
     summary: str = Field(min_length=1, max_length=1000)
     completed_at: datetime
+    lifecycle_status: MemoryLifecycleStatus = (
+        MemoryLifecycleStatus.ACTIVE
+    )
 
 
 class MemoryContext(BaseModel):
