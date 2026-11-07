@@ -1,14 +1,18 @@
-from app.core.communication_audit import CommunicationAudit
-from app.core.communication_policy import CommunicationPolicy
+
+import logging
+import sqlite3
+
 from app.agents.registry import AgentRegistry
 from app.core.agent_auth import AgentAuthenticator
+from app.core.communication_audit import CommunicationAudit
+from app.core.communication_policy import CommunicationPolicy
 from app.core.schemas import (
     AgentMessage,
     MessageType,
     TaskIntent,
     TaskRequest,
 )
-import logging
+from app.memory.context_builder import MemoryContextBuilder
 from app.memory.manager import MemoryManager
 from app.memory.schemas import (
     EpisodicMemoryRecord,
@@ -16,6 +20,7 @@ from app.memory.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 class Coordinator:
     def __init__(
@@ -29,12 +34,21 @@ class Coordinator:
         self.communication_policy = CommunicationPolicy()
         self.communication_audit = CommunicationAudit()
         self.memory_manager = memory_manager
+
+        self.memory_context_builder = (
+            MemoryContextBuilder(memory_manager)
+            if memory_manager is not None
+            else None
+        )
+
         self.routes = {
             TaskIntent.FILE_ANALYSIS: "FileAnalysisAgent",
             TaskIntent.PLAN_TASK: "PlanningAgent",
         }
 
     def handle_task(self, task: TaskRequest) -> AgentMessage:
+        agent_name = None
+
         try:
             agent_name = self.routes.get(task.intent)
 
@@ -66,75 +80,270 @@ class Coordinator:
 
             agent = self.registry.get(agent_name)
 
+            memory_context = self._build_memory_context(
+                task,
+                agent_name,
+            )
+
             request = AgentMessage(
                 task_id=task.task_id,
                 sender="Coordinator",
                 recipient=agent_name,
                 message_type=MessageType.TASK,
                 payload=payload,
-            )
-             # Enforce selective communication policy.
-                        # Enforce selective communication policy.
-            try:
-                self.communication_policy.validate_outgoing(request)
-
-            except ValueError as error:
-                self.communication_audit.record(
-                    request,
-                    outcome="rejected",
-                    reason=str(error),
-                )
-                raise
-
-            # Record policy-approved outgoing communication.
-            self.communication_audit.record(
-                request,
-                outcome="accepted",
+                memory_context=memory_context,
             )
 
-            # Deliver the validated request to the agent.
+            self._send_request(request)
+
             response = agent.process(request)
-            # Validate the response against the registered agent.
-            if response.sender != agent_name:
-                raise ValueError("Agent identity mismatch.")
 
-            if response.task_id != task.task_id:
-                raise ValueError("Agent task ID mismatch.")
+            self._validate_agent_response(
+                response,
+                agent_name,
+                task.task_id,
+                request.message_id,
+            )
 
-            if response.recipient != "Coordinator":
-                raise ValueError("Unexpected response recipient.")
-
-            if response.in_reply_to != request.message_id:
-                raise ValueError("Agent response correlation mismatch.")
-
-            if response.message_type not in {
-                MessageType.RESULT,
-                MessageType.ERROR,
-            }:
-                raise ValueError("Unexpected agent response type.")
-
-            # Sign using the trusted runtime's registered identity.
             signed_response = self.authenticator.sign(
                 response,
                 expected_sender=agent_name,
             )
 
-            # Verify before accepting the response.
             if not self.authenticator.verify(signed_response):
-                raise ValueError("Agent response authentication failed.")
+                raise ValueError(
+                    "Agent response authentication failed."
+                )
 
-            self._remember_task(task, agent_name, signed_response)
+            # Planning results must pass verification before acceptance.
+            if (
+                task.intent == TaskIntent.PLAN_TASK
+                and signed_response.message_type == MessageType.RESULT
+            ):
+                self._verify_plan(task, signed_response)
+
+            self._remember_task(
+                task,
+                agent_name,
+                signed_response,
+            )
 
             return signed_response
 
-        except ValueError as error:
-            return AgentMessage(
-                task_id=task.task_id,
-                sender="Coordinator",
-                recipient="User",
-                message_type=MessageType.ERROR,
-                payload={"error": str(error)},
+        except (ValueError, PermissionError) as error:
+            failure = self._create_error_response(
+                task,
+                str(error),
             )
+
+            if agent_name is not None:
+                self._remember_task(
+                    task,
+                    agent_name,
+                    failure,
+                )
+
+            return failure
+
+        except Exception:
+            logger.exception(
+                "Unexpected error while processing task %s.",
+                task.task_id,
+            )
+
+            failure = self._create_error_response(
+                task,
+                "An unexpected internal error occurred while processing the task.",
+            )
+
+            if agent_name is not None:
+                self._remember_task(
+                    task,
+                    agent_name,
+                    failure,
+                )
+
+            return failure
+
+    
+    def _build_memory_context(
+        self,
+        task: TaskRequest,
+        recipient_agent: str,
+        ):
+        if self.memory_context_builder is None:
+            return None
+
+        try:
+            objective = (
+                task.user_input
+                if task.intent == TaskIntent.PLAN_TASK
+                else None
+        )
+
+            return self.memory_context_builder.build_context(
+                task_id=task.task_id,
+                intent=task.intent.value,
+                recipient_agent=recipient_agent,
+                objective=objective,
+            )
+
+        except PermissionError:
+                raise
+
+        except sqlite3.Error:
+            logger.warning(
+            "Memory database unavailable; proceeding without context."
+            )
+            return None
+
+
+    def _send_request(self, request: AgentMessage) -> None:
+        try:
+            self.communication_policy.validate_outgoing(request)
+
+        except ValueError as error:
+            self.communication_audit.record(
+                request,
+                outcome="rejected",
+                reason=str(error),
+            )
+            raise
+
+        self.communication_audit.record(
+            request,
+            outcome="accepted",
+        )
+
+    @staticmethod
+    def _validate_agent_response(
+        response: AgentMessage,
+        expected_sender: str,
+        expected_task_id,
+        expected_message_id,
+    ) -> None:
+        if response.sender != expected_sender:
+            raise ValueError("Agent identity mismatch.")
+
+        if response.task_id != expected_task_id:
+            raise ValueError("Agent task ID mismatch.")
+
+        if response.recipient != "Coordinator":
+            raise ValueError("Unexpected response recipient.")
+
+        if response.in_reply_to != expected_message_id:
+            raise ValueError("Agent response correlation mismatch.")
+
+        if response.message_type not in {
+            MessageType.RESULT,
+            MessageType.ERROR,
+        }:
+            raise ValueError("Unexpected agent response type.")
+
+    def _verify_plan(
+        self,
+        task: TaskRequest,
+        planning_response: AgentMessage,
+    ) -> None:
+        verification_agent_name = "VerificationAgent"
+
+        verification_agent = self.registry.get(
+            verification_agent_name
+        )
+
+        verification_context = self._build_memory_context(
+            task,
+            verification_agent_name,
+        )
+
+        verification_request = AgentMessage(
+            task_id=task.task_id,
+            sender="Coordinator",
+            recipient=verification_agent_name,
+            message_type=MessageType.TASK,
+            payload={
+                "planning_result": planning_response.model_dump(
+                    mode="json"
+                )
+            },
+            memory_context=verification_context,
+        )
+
+        self._send_request(verification_request)
+
+        verification_response = verification_agent.process(
+            verification_request
+        )
+
+        self._validate_agent_response(
+            verification_response,
+            verification_agent_name,
+            task.task_id,
+            verification_request.message_id,
+        )
+
+        signed_verification = self.authenticator.sign(
+            verification_response,
+            expected_sender=verification_agent_name,
+        )
+
+        if not self.authenticator.verify(signed_verification):
+            raise ValueError(
+                "Verification response authentication failed."
+            )
+
+        if signed_verification.message_type != MessageType.RESULT:
+            raise ValueError(
+                "VerificationAgent did not return a valid result."
+            )
+
+        report = signed_verification.payload
+
+        if not isinstance(report, dict):
+            raise ValueError(
+                "Invalid verification report."
+            )
+
+        if type(report.get("valid")) is not bool:
+            raise ValueError(
+                "Verification report has an invalid status."
+            )
+
+        if report["valid"] is not True:
+            raise ValueError(
+                "Planning result failed verification."
+            )
+
+        if report.get("source_agent") != "PlanningAgent":
+            raise ValueError(
+                "Verification report source mismatch."
+            )
+
+        if report.get("task_id") != str(task.task_id):
+            raise ValueError(
+                "Verification report task ID mismatch."
+            )
+
+        errors = report.get("errors")
+
+        if type(errors) is not list or errors:
+            raise ValueError(
+                "Verification report contains errors."
+            )
+
+    @staticmethod
+    def _create_error_response(
+        task: TaskRequest,
+        error: str,
+    ) -> AgentMessage:
+        return AgentMessage(
+            task_id=task.task_id,
+            sender="Coordinator",
+            recipient="User",
+            message_type=MessageType.ERROR,
+            payload={"error": error},
+        )
+
     def _remember_task(
         self,
         task: TaskRequest,
@@ -153,7 +362,9 @@ class Coordinator:
 
             if agent_name == "FileAnalysisAgent":
                 total_files = response.payload.get("total_files")
-                duplicate_groups = response.payload.get("duplicate_groups")
+                duplicate_groups = response.payload.get(
+                    "duplicate_groups"
+                )
 
                 if (
                     type(total_files) is not int
@@ -199,8 +410,9 @@ class Coordinator:
 
         try:
             self.memory_manager.remember_task(record)
+
         except Exception:
-            logger.warning(
-                "Task memory could not be persisted; "
-                "the agent response will still be returned."
+            logger.exception(
+                "Task memory could not be persisted for task %s.",
+                task.task_id,
             )

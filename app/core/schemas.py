@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
-
+from app.memory.context_schemas import MemoryContext
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -86,6 +86,8 @@ class AgentMessage(BaseModel):
     message_type: MessageType
 
     payload: dict[str, Any] = Field(default_factory=dict)
+   
+    memory_context: MemoryContext | None = None
 
     in_reply_to: UUID | None = None
 

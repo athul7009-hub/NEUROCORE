@@ -16,12 +16,9 @@ class CommunicationPolicy:
         self.max_payload_bytes = max_payload_bytes
 
         self.allowed_fields = {
-            "FileAnalysisAgent": {
-                "directory",
-            },
-            "PlanningAgent": {
-                "objective",
-            },
+            "FileAnalysisAgent": {"directory"},
+            "PlanningAgent": {"objective"},
+            "VerificationAgent": {"planning_result"},
         }
 
     def validate_outgoing(self, message: AgentMessage) -> None:

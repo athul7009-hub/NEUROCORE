@@ -106,3 +106,28 @@ def test_rejects_non_json_payload():
 
     with pytest.raises(ValueError, match="valid JSON"):
         policy.validate_outgoing(message)
+def test_allows_permitted_verification_payload(policy):
+    message = create_message(
+        recipient="VerificationAgent",
+        payload={
+            "planning_result": {
+                "sender": "PlanningAgent",
+                "message_type": "result",
+            }
+        },
+    )
+
+    policy.validate_outgoing(message)
+
+
+def test_rejects_unauthorized_verification_payload_field(policy):
+    message = create_message(
+        recipient="VerificationAgent",
+        payload={
+            "planning_result": {},
+            "password": "secret",
+        },
+    )
+
+    with pytest.raises(ValueError, match="Unauthorized payload fields"):
+        policy.validate_outgoing(message)

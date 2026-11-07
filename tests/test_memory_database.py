@@ -78,3 +78,25 @@ def test_database_rolls_back_failed_transaction(tmp_path):
         ).fetchone()[0]
 
     assert count == 0
+def test_database_enables_foreign_keys(tmp_path):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        result = connection.execute(
+            "PRAGMA foreign_keys"
+        ).fetchone()[0]
+
+    assert result == 1
+
+
+def test_database_uses_wal_mode(tmp_path):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        result = connection.execute(
+            "PRAGMA journal_mode"
+        ).fetchone()[0]
+
+    assert result.lower() == "wal"

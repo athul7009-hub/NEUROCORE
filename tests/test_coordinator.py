@@ -1,20 +1,29 @@
+
 import json
-import pytest
+import sqlite3
 from unittest.mock import patch
 from uuid import uuid4
-from app.core.communication_audit import CommunicationAudit
-from app.agents.base_agent import BaseAgent
-from app.agents.planning_agent import PlanningAgent
-from app.agents.coordinator import Coordinator
-from app.agents.registry import AgentRegistry
-from app.agents.file_analysis_agent import FileAnalysisAgent
-from app.core.agent_auth import AgentAuthenticator
 
+import pytest
+
+from app.agents.base_agent import BaseAgent
+from app.agents.coordinator import Coordinator
+from app.agents.file_analysis_agent import FileAnalysisAgent
+from app.agents.planning_agent import PlanningAgent
+from app.agents.registry import AgentRegistry
+from app.agents.verification_agent import VerificationAgent
+from app.core.agent_auth import AgentAuthenticator
+from app.core.communication_audit import CommunicationAudit
 from app.core.schemas import (
     AgentMessage,
-    TaskRequest,
-    TaskIntent,
     MessageType,
+    TaskIntent,
+    TaskRequest,
+)
+from app.memory.database import SQLiteDatabase
+from app.memory.manager import MemoryManager
+from app.memory.repositories.episodic_memory import (
+    EpisodicMemoryRepository,
 )
 
 
@@ -27,6 +36,9 @@ def create_test_authenticator():
 
 
 def create_coordinator(registry):
+    if "VerificationAgent" not in registry.list_agents():
+        registry.register(VerificationAgent())
+
     return Coordinator(registry, create_test_authenticator())
 
 
@@ -176,26 +188,11 @@ def test_coordinator_routes_planning_task():
 @pytest.mark.parametrize(
     ("overrides", "expected_error"),
     [
-        (
-            {"sender": "FileAnalysisAgent"},
-            "identity mismatch",
-        ),
-        (
-            {"task_id": uuid4()},
-            "task id mismatch",
-        ),
-        (
-            {"recipient": "User"},
-            "recipient",
-        ),
-        (
-            {"in_reply_to": uuid4()},
-            "correlation mismatch",
-        ),
-        (
-            {"message_type": MessageType.TASK},
-            "response type",
-        ),
+        ({"sender": "FileAnalysisAgent"}, "identity mismatch"),
+        ({"task_id": uuid4()}, "task id mismatch"),
+        ({"recipient": "User"}, "recipient"),
+        ({"in_reply_to": uuid4()}, "correlation mismatch"),
+        ({"message_type": MessageType.TASK}, "response type"),
     ],
 )
 def test_coordinator_rejects_malicious_agent_responses(
@@ -274,7 +271,6 @@ def test_coordinator_audits_rejected_communication(tmp_path):
     coordinator = create_coordinator(registry)
     coordinator.communication_audit = CommunicationAudit(audit_path)
 
-    # Simulate a policy that does not permit the directory field.
     coordinator.communication_policy.allowed_fields[
         "FileAnalysisAgent"
     ] = {"unauthorized_field"}
@@ -340,3 +336,174 @@ def test_coordinator_audit_does_not_store_payload_values(tmp_path):
     assert private_directory not in audit_content
     assert "directory" in audit_content
     assert "accepted" in audit_content
+
+
+def test_coordinator_rejects_memory_authorization_failure(tmp_path):
+    registry = AgentRegistry()
+    agent = PlanningAgent()
+    registry.register(agent)
+
+    database = SQLiteDatabase(tmp_path / "memory.db")
+    repository = EpisodicMemoryRepository(database)
+    memory_manager = MemoryManager(repository)
+    memory_manager.initialize()
+
+    coordinator = Coordinator(
+        registry,
+        create_test_authenticator(),
+        memory_manager,
+    )
+
+    task = TaskRequest(
+        user_input="Create a plan to analyze my project",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    with patch.object(
+        coordinator.memory_context_builder,
+        "build_context",
+        side_effect=PermissionError("Unauthorized memory retrieval."),
+    ):
+        with patch.object(
+            agent,
+            "process",
+            wraps=agent.process,
+        ) as process_mock:
+            response = coordinator.handle_task(task)
+
+    assert response.sender == "Coordinator"
+    assert response.message_type == MessageType.ERROR
+    assert "unauthorized" in response.payload["error"].lower()
+
+    process_mock.assert_not_called()
+
+
+def test_coordinator_continues_when_memory_database_is_unavailable(tmp_path):
+    registry = AgentRegistry()
+    agent = PlanningAgent()
+    registry.register(agent)
+    registry.register(VerificationAgent())
+
+    database = SQLiteDatabase(tmp_path / "memory.db")
+    repository = EpisodicMemoryRepository(database)
+    memory_manager = MemoryManager(repository)
+    memory_manager.initialize()
+
+    coordinator = Coordinator(
+        registry,
+        create_test_authenticator(),
+        memory_manager,
+    )
+
+    task = TaskRequest(
+        user_input="Create a plan to analyze my project",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    with patch.object(
+        coordinator.memory_context_builder,
+        "build_context",
+        side_effect=sqlite3.OperationalError("Database unavailable."),
+    ):
+        with patch.object(
+            agent,
+            "process",
+            wraps=agent.process,
+        ) as process_mock:
+            response = coordinator.handle_task(task)
+
+    assert response.sender == "PlanningAgent"
+    assert response.message_type == MessageType.RESULT
+
+    process_mock.assert_called_once()
+    assert process_mock.call_args.args[0].memory_context is None
+
+
+def test_coordinator_returns_success_when_memory_persistence_fails(tmp_path):
+    registry = AgentRegistry()
+    agent = PlanningAgent()
+    registry.register(agent)
+    registry.register(VerificationAgent())
+
+    database = SQLiteDatabase(tmp_path / "memory.db")
+    repository = EpisodicMemoryRepository(database)
+    memory_manager = MemoryManager(repository)
+    memory_manager.initialize()
+
+    coordinator = Coordinator(
+        registry,
+        create_test_authenticator(),
+        memory_manager,
+    )
+
+    task = TaskRequest(
+        user_input="Create a plan to analyze my project",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    with patch.object(
+        memory_manager,
+        "remember_task",
+        side_effect=sqlite3.OperationalError("Database unavailable."),
+    ) as remember_mock:
+        response = coordinator.handle_task(task)
+
+    assert response.sender == "PlanningAgent"
+    assert response.message_type == MessageType.RESULT
+    assert response.signature is not None
+    assert len(response.payload["steps"]) == 5
+
+    remember_mock.assert_called_once()
+def test_coordinator_handles_unexpected_planning_agent_exception():
+    registry = AgentRegistry()
+    agent = PlanningAgent()
+    registry.register(agent)
+
+    coordinator = create_coordinator(registry)
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    with patch.object(
+        agent,
+        "process",
+        side_effect=RuntimeError("Internal processing failure"),
+    ):
+        response = coordinator.handle_task(task)
+
+    assert response.sender == "Coordinator"
+    assert response.message_type == MessageType.ERROR
+    assert response.signature is None
+    assert "internal" in response.payload["error"].lower()
+
+def test_coordinator_handles_unexpected_verification_agent_exception():
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    verification_agent = VerificationAgent()
+    registry.register(verification_agent)
+
+    coordinator = create_coordinator(registry)
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    with patch.object(
+        verification_agent,
+        "process",
+        side_effect=RuntimeError("Internal verification failure"),
+    ):
+        response = coordinator.handle_task(task)
+
+    assert response.sender == "Coordinator"
+    assert response.message_type == MessageType.ERROR
+    assert response.signature is None
+
+    error_message = response.payload["error"].lower()
+
+    assert "unexpected internal error" in error_message
+    assert "internal verification failure" not in error_message

@@ -1,14 +1,22 @@
+
 from app.agents.base_agent import BaseAgent
 from app.core.schemas import AgentMessage, MessageType
+from app.memory.relevance_evaluator import MemoryRelevanceEvaluator
 from app.tools.scan_pipeline import run_scan
 
 
 class FileAnalysisAgent(BaseAgent):
+    MEMORY_OBJECTIVE = (
+        "Analyze files, file metadata, file extensions, duplicate files, "
+        "and scan warnings."
+    )
+
     def __init__(self):
         super().__init__(
             name="FileAnalysisAgent",
             description="Scans approved directories and analyzes file metadata."
         )
+        self.memory_evaluator = MemoryRelevanceEvaluator()
 
     def process(self, message: AgentMessage) -> AgentMessage:
         try:
@@ -16,6 +24,25 @@ class FileAnalysisAgent(BaseAgent):
 
             if not isinstance(directory, str) or not directory.strip():
                 raise ValueError("A valid directory must be provided.")
+
+            metadata = {}
+            memory_context = message.memory_context
+
+            if memory_context is not None:
+                if memory_context.task_id != message.task_id:
+                    raise ValueError("Memory context task ID mismatch.")
+
+                if memory_context.recipient_agent != self.name:
+                    raise ValueError("Memory context recipient mismatch.")
+
+                evaluation = self.memory_evaluator.evaluate(
+                    objective=self.MEMORY_OBJECTIVE,
+                    memories=memory_context.memories,
+                )
+
+                metadata["memory_evaluation"] = (
+                    evaluation.model_dump(mode="json")
+                )
 
             result = run_scan(directory)
 
@@ -36,6 +63,7 @@ class FileAnalysisAgent(BaseAgent):
                 recipient=message.sender,
                 message_type=MessageType.RESULT,
                 payload=summary,
+                metadata=metadata,
                 in_reply_to=message.message_id,
             )
 
