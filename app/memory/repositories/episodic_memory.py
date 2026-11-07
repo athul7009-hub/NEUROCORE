@@ -274,3 +274,94 @@ class EpisodicMemoryRepository:
             usage_tracked=bool(row["usage_tracked"]),
             is_protected=bool(row["is_protected"]),
         )
+    def archive(self, task_id: UUID) -> bool:
+        """Archives an active memory without deleting its contents."""
+
+        from datetime import datetime, timezone
+
+        with self.database.connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE episodic_memory
+                SET lifecycle_status = 'archived',
+                    archived_at = ?
+                WHERE task_id = ?
+                  AND lifecycle_status = 'active'
+                """,
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    str(task_id),
+                ),
+            )
+
+        return cursor.rowcount == 1
+
+    def restore(self, task_id: UUID) -> bool:
+        """Restores an archived memory."""
+
+        with self.database.connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE episodic_memory
+                SET lifecycle_status = 'active',
+                    archived_at = NULL
+                WHERE task_id = ?
+                  AND lifecycle_status = 'archived'
+                """,
+                (str(task_id),),
+            )
+        return cursor.rowcount == 1
+    def get_archived(
+        self,
+        limit: int = 10,
+        intent: str | None = None,
+        status: MemoryStatus | None = None,
+        agent_name: str | None = None,
+    ) -> list[EpisodicMemoryRecord]:
+        """Retrieves archived memories for historical inspection."""
+
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("Limit must be an integer.")
+
+        if not 1 <= limit <= 100:
+            raise ValueError("Limit must be between 1 and 100.")
+
+        conditions = ["lifecycle_status = 'archived'"]
+        parameters = []
+
+        if intent is not None:
+            conditions.append("intent = ?")
+            parameters.append(intent)
+
+        if status is not None:
+            conditions.append("status = ?")
+            parameters.append(status.value)
+
+        if agent_name is not None:
+            conditions.append("agent_name = ?")
+            parameters.append(agent_name)
+
+        query = (
+            "SELECT * FROM episodic_memory WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY completed_at DESC, rowid DESC LIMIT ?"
+        )
+        parameters.append(limit)
+        if intent is not None:
+            if not isinstance(intent, str):
+                raise TypeError("Intent must be a string.")
+            if not intent.strip():
+                raise ValueError("Intent cannot be empty.")
+
+        if status is not None and not isinstance(status, MemoryStatus):
+            raise TypeError("Status must be a MemoryStatus value.")
+
+        if agent_name is not None:
+            if not isinstance(agent_name, str):
+                raise TypeError("Agent name must be a string.")
+            if not agent_name.strip():
+                raise ValueError("Agent name cannot be empty.")
+        with self.database.connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+
+        return [self._to_record(row) for row in rows]

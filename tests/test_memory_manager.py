@@ -14,6 +14,7 @@ from app.memory.schemas import (
     MemorySensitivity,
     MemorySource,
     MemoryStatus,
+    MemoryLifecycleStatus,
 )
 
 
@@ -295,3 +296,163 @@ def test_record_usage_requires_trusted_agent(manager):
             [record.task_id],
             requesting_agent="UnknownAgent",
         )
+from datetime import timedelta
+from types import SimpleNamespace
+
+
+def create_archivable_record():
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=120)
+
+    return create_record().model_copy(
+        update={
+            "created_at": old,
+            "completed_at": old,
+            "last_used_at": old,
+            "usage_tracked": True,
+            "use_count": 0,
+        }
+    )
+
+
+def test_assess_retention_returns_eligibility(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+
+    results = manager.assess_retention(
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert len(results) == 1
+    assessed_record, assessment = results[0]
+
+    assert assessed_record.task_id == record.task_id
+    assert assessment.eligible is True
+
+
+def test_archive_is_disabled_by_default(manager, monkeypatch):
+    record = create_archivable_record()
+    manager.remember_task(record)
+
+    monkeypatch.setattr(
+        "app.memory.manager.settings",
+        SimpleNamespace(memory_automatic_archival_enabled=False),
+    )
+
+    with pytest.raises(PermissionError, match="disabled"):
+        manager.archive_task(
+            record.task_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+    assert manager.get_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    ) is not None
+
+
+def test_archive_requires_coordinator(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+
+    with pytest.raises(PermissionError, match="Only the coordinator"):
+        manager.archive_task(
+            record.task_id,
+            requesting_agent="PlanningAgent",
+        )
+
+
+def test_restore_requires_coordinator(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+    manager.repository.archive(record.task_id)
+
+    with pytest.raises(PermissionError, match="Only the coordinator"):
+        manager.restore_task(
+            record.task_id,
+            requesting_agent="PlanningAgent",
+        )
+
+
+def test_archived_memories_are_retrievable_as_history(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+    manager.repository.archive(record.task_id)
+
+    # Archived memories must not appear in normal retrieval.
+    assert manager.get_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    ) is None
+
+    # Authorized historical retrieval should still work.
+    archived = manager.get_archived_tasks(
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert len(archived) == 1
+    assert archived[0].task_id == record.task_id
+
+
+def test_archived_retrieval_rejects_untrusted_agent(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+    manager.repository.archive(record.task_id)
+
+    with pytest.raises(PermissionError, match="Unauthorized"):
+        manager.get_archived_tasks(
+            requesting_agent="UnknownAgent",
+        )
+
+
+def test_restore_returns_memory_to_active_retrieval(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+    manager.repository.archive(record.task_id)
+
+    restored = manager.restore_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert restored is True
+
+    retrieved = manager.get_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert retrieved is not None
+    assert retrieved.lifecycle_status == MemoryLifecycleStatus.ACTIVE
+    assert retrieved.archived_at is None
+
+
+def test_archive_ineligible_memory_is_rejected(manager, monkeypatch):
+    record = create_record()
+    manager.remember_task(record)
+
+    monkeypatch.setattr(
+        "app.memory.manager.settings",
+        SimpleNamespace(memory_automatic_archival_enabled=True),
+    )
+
+    with pytest.raises(ValueError, match="not eligible"):
+        manager.archive_task(
+            record.task_id,
+            requesting_agent="CoordinatorAgent",
+        )
+def test_non_coordinator_cannot_assess_retention(manager):
+    with pytest.raises(PermissionError, match="Only the coordinator"):
+        manager.assess_retention(
+            requesting_agent="PlanningAgent",
+        )
+
+
+def test_archived_retrieval_does_not_authorize_active_memory(manager):
+    record = create_record()
+    manager.remember_task(record)
+
+    assert manager.policy.evaluate_archived_retrieval(
+        record,
+        "CoordinatorAgent",
+    ) is False

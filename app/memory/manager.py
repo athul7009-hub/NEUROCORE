@@ -1,7 +1,14 @@
+
 from uuid import UUID
 
+from app.core.config import settings
+from app.memory.memory_policy import MemoryPolicy
 from app.memory.repositories.episodic_memory import (
     EpisodicMemoryRepository,
+)
+from app.memory.retention_policy import (
+    MemoryRetentionPolicy,
+    RetentionAssessment,
 )
 from app.memory.schemas import (
     EpisodicMemoryRecord,
@@ -9,7 +16,6 @@ from app.memory.schemas import (
     MemorySource,
     MemoryStatus,
 )
-from app.memory.memory_policy import MemoryPolicy
 
 
 class MemoryManager:
@@ -22,9 +28,30 @@ class MemoryManager:
     ):
         self.repository = repository
         self.policy = policy or MemoryPolicy()
+        self.retention_policy = MemoryRetentionPolicy()
 
     def initialize(self) -> None:
         self.repository.initialize()
+
+    def _authorize_requester(self, requesting_agent: str) -> None:
+        """Ensures the requesting agent is trusted."""
+
+        if (
+            not isinstance(requesting_agent, str)
+            or not requesting_agent.strip()
+            or requesting_agent not in self.policy.TRUSTED_AGENTS
+        ):
+            raise PermissionError("Unauthorized memory retrieval.")
+
+    def _authorize_coordinator(self, requesting_agent: str) -> None:
+        """Restricts memory lifecycle operations to the coordinator."""
+
+        self._authorize_requester(requesting_agent)
+
+        if requesting_agent != "CoordinatorAgent":
+            raise PermissionError(
+                "Only the coordinator can manage memory lifecycle operations."
+            )
 
     def remember_task(
         self,
@@ -46,14 +73,6 @@ class MemoryManager:
         )
 
         self.repository.save(approved_record)
-
-    def _authorize_requester(self, requesting_agent: str) -> None:
-        if (
-            not isinstance(requesting_agent, str)
-            or not requesting_agent.strip()
-            or requesting_agent not in self.policy.TRUSTED_AGENTS
-        ):
-            raise PermissionError("Unauthorized memory retrieval.")
 
     def get_task(
         self,
@@ -149,3 +168,93 @@ class MemoryManager:
                 )
             ):
                 self.repository.record_usage(task_id)
+
+    def assess_retention(
+        self,
+        *,
+        requesting_agent: str,
+        limit: int = 100,
+    ) -> list[tuple[EpisodicMemoryRecord, RetentionAssessment]]:
+        """Assesses active memories without changing them."""
+
+        self._authorize_coordinator(requesting_agent)
+
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("Limit must be an integer.")
+
+        if not 1 <= limit <= 100:
+            raise ValueError("Limit must be between 1 and 100.")
+
+        records = self.repository.get_recent(limit=limit)
+
+        return [
+            (record, self.retention_policy.assess(record))
+            for record in records
+        ]
+
+    def archive_task(
+        self,
+        task_id: UUID,
+        *,
+        requesting_agent: str,
+    ) -> bool:
+        """Archives an eligible memory through coordinator authorization."""
+
+        self._authorize_coordinator(requesting_agent)
+
+        record = self.repository.get(task_id)
+
+        if record is None:
+            return False
+
+        assessment = self.retention_policy.assess(record)
+
+        if not assessment.eligible:
+            raise ValueError(
+                "Memory is not eligible for archival: "
+                + "; ".join(assessment.reasons)
+            )
+
+        if not settings.memory_automatic_archival_enabled:
+            raise PermissionError(
+                "Archival execution is disabled by configuration."
+            )
+
+        return self.repository.archive(task_id)
+
+    def restore_task(
+        self,
+        task_id: UUID,
+        *,
+        requesting_agent: str,
+    ) -> bool:
+        """Restores an archived memory through coordinator authorization."""
+
+        self._authorize_coordinator(requesting_agent)
+
+        return self.repository.restore(task_id)
+
+    def get_archived_tasks(
+        self,
+        limit: int = 10,
+        *,
+        requesting_agent: str,
+        intent: str | None = None,
+    ) -> list[EpisodicMemoryRecord]:
+        """Retrieves authorized archived memories for historical context."""
+
+        self._authorize_requester(requesting_agent)
+
+        records = self.repository.get_archived(
+            limit=limit,
+            intent=intent,
+        )
+
+        return [
+            record
+            for record in records
+            if self.policy.evaluate_archived_retrieval(
+                record,
+                requesting_agent,
+            )
+        ]

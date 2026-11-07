@@ -2,6 +2,7 @@
 from app.memory.schemas import (
     EpisodicMemoryRecord,
     MemorySensitivity,
+    MemoryLifecycleStatus,
     MemorySource,
 )
 
@@ -65,6 +66,29 @@ class MemoryPolicy:
             return False
 
         if requesting_agent not in self.TRUSTED_AGENTS:
+            return False
+
+        return record.sensitivity in {
+            MemorySensitivity.PUBLIC,
+            MemorySensitivity.INTERNAL,
+        }
+    def evaluate_archived_retrieval(
+        self,
+        record: EpisodicMemoryRecord,
+        requesting_agent: str,
+    ) -> bool:
+        """Authorizes historical retrieval without changing record state."""
+
+        if not isinstance(record, EpisodicMemoryRecord):
+            return False
+
+        if (
+            not isinstance(requesting_agent, str)
+            or requesting_agent not in self.TRUSTED_AGENTS
+        ):
+            return False
+
+        if record.lifecycle_status != MemoryLifecycleStatus.ARCHIVED:
             return False
 
         return record.sensitivity in {
