@@ -29,7 +29,15 @@ class SQLiteDatabase:
         with self.connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA foreign_keys = ON")
+    def check_integrity(self) -> bool:
+        """Returns whether the SQLite database passes its integrity check."""
 
+        with self.connection() as connection:
+            result = connection.execute(
+            "PRAGMA integrity_check"
+        ).fetchone()[0]
+
+        return result == "ok"
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
         """

@@ -280,3 +280,27 @@ def test_recent_memories_support_offset_pagination(repository):
     assert [record.task_id for record in third_page] == [
         record.task_id for record in expected[4:]
     ]
+def test_memory_persists_after_database_restart(tmp_path):
+    database_path = tmp_path / "memory.db"
+
+    # First application session: save a memory.
+    first_database = SQLiteDatabase(database_path)
+    first_database.initialize()
+
+    first_repository = EpisodicMemoryRepository(first_database)
+    first_repository.initialize()
+
+    record = create_record()
+    first_repository.save(record)
+
+    # Simulate an application restart using new instances.
+    second_database = SQLiteDatabase(database_path)
+    second_database.initialize()
+
+    second_repository = EpisodicMemoryRepository(second_database)
+    second_repository.initialize()
+
+    # Verify the original memory survived.
+    retrieved = second_repository.get(record.task_id)
+
+    assert retrieved == record

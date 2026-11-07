@@ -1,3 +1,4 @@
+import sqlite3
 
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
@@ -19,7 +20,21 @@ def create_coordinator() -> Coordinator:
     """Build and initialize the NEUROCORE application."""
 
     # Initialize persistent memory.
+    # Check database integrity before initializing or migrating memory.
     database = SQLiteDatabase(settings.database_path)
+
+    database.database_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    if not database.check_integrity():
+        raise sqlite3.DatabaseError(
+            "NEUROCORE memory database failed integrity check."
+        )
+
+    database.initialize()
+
     repository = EpisodicMemoryRepository(database)
     memory_manager = MemoryManager(repository)
     memory_manager.initialize()
