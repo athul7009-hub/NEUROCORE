@@ -3,8 +3,11 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
-from app.memory.context_schemas import MemoryContext
+
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.memory.context_schemas import MemoryContext
+from app.memory.semantic_context_schemas import SemanticMemoryContext
 
 
 def current_timestamp() -> datetime:
@@ -21,9 +24,11 @@ class MessageType(str, Enum):
     RESULT = "result"
     ERROR = "error"
 
+
 class TaskIntent(str, Enum):
     FILE_ANALYSIS = "file_analysis"
     PLAN_TASK = "plan_task"
+
 
 class ToolStatus(str, Enum):
     PROPOSED = "proposed"
@@ -32,12 +37,14 @@ class ToolStatus(str, Enum):
     EXECUTED = "executed"
     FAILED = "failed"
 
+
 class OperationAction(str, Enum):
     CREATE = "create"
     COPY = "copy"
     RENAME = "rename"
     QUARANTINE = "quarantine"
     RESTORE = "restore"
+
 
 class OperationStatus(str, Enum):
     PROPOSED = "proposed"
@@ -70,27 +77,31 @@ class TaskPlan(BaseModel):
     requires_approval: bool = True
     created_at: datetime = Field(default_factory=current_timestamp)
 
+
 # -------------------------------
 # Agent communication schema
 # -------------------------------
 
 class AgentMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
     signature: str | None = None
     message_id: UUID = Field(default_factory=uuid4)
     task_id: UUID
 
     sender: str
     recipient: str
-
     message_type: MessageType
 
     payload: dict[str, Any] = Field(default_factory=dict)
-   
+
+    # Episodic memory context
     memory_context: MemoryContext | None = None
 
-    in_reply_to: UUID | None = None
+    # Validated semantic memory context
+    semantic_context: SemanticMemoryContext | None = None
 
+    in_reply_to: UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     created_at: datetime = Field(default_factory=current_timestamp)
@@ -100,7 +111,7 @@ class AgentMessage(BaseModel):
     context_budget_tokens: int = Field(
         default=2000,
         ge=1,
-        le=32000
+        le=32000,
     )
 
 
@@ -110,7 +121,6 @@ class AgentMessage(BaseModel):
 
 class ToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
 
     action_id: UUID = Field(default_factory=uuid4)
 
@@ -142,6 +152,9 @@ class ToolResult(BaseModel):
     completed_at: datetime = Field(default_factory=current_timestamp)
 
 
+# -------------------------------
+# File operation plan
+# -------------------------------
 
 class OperationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -20,7 +20,10 @@ from app.memory.schemas import (
     EpisodicMemoryRecord,
     MemoryStatus,
 )
-
+from app.memory.semantic_manager import SemanticMemoryManager
+from app.memory.semantic_context_builder import (
+    SemanticMemoryContextBuilder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,7 @@ class Coordinator:
         registry: AgentRegistry,
         authenticator: AgentAuthenticator,
         memory_manager: MemoryManager | None = None,
+        semantic_memory_manager: SemanticMemoryManager | None = None,
     ):
         self.registry = registry
         self.authenticator = authenticator

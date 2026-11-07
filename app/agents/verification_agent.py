@@ -1,3 +1,4 @@
+
 from app.agents.base_agent import BaseAgent
 from app.core.schemas import AgentMessage, MessageType, TaskPlan
 from app.memory.relevance_evaluator import MemoryRelevanceEvaluator
@@ -52,7 +53,9 @@ class VerificationAgent(BaseAgent):
                 errors.append("Planning response is not a RESULT message.")
 
             if planning_result.task_id != message.task_id:
-                errors.append("Task ID mismatch between request and planning response.")
+                errors.append(
+                    "Task ID mismatch between request and planning response."
+                )
 
             if not planning_result.in_reply_to:
                 errors.append("Planning response correlation is missing.")
@@ -70,7 +73,7 @@ class VerificationAgent(BaseAgent):
             if plan is not None and plan.task_id != planning_result.task_id:
                 errors.append("Task ID mismatch between plan and message.")
 
-        # Validate and evaluate optional memory context.
+        # Validate and evaluate optional episodic memory context.
         memory_context = message.memory_context
 
         if memory_context is not None:
@@ -96,6 +99,21 @@ class VerificationAgent(BaseAgent):
 
                 except (ValueError, TypeError):
                     errors.append("Memory evaluation failed.")
+
+        # Validate optional semantic memory context.
+        semantic_context = message.semantic_context
+
+        if semantic_context is not None:
+            if semantic_context.task_id != message.task_id:
+                errors.append("Semantic memory context task ID mismatch.")
+
+            elif semantic_context.recipient_agent != self.name:
+                errors.append("Semantic memory context recipient mismatch.")
+
+            else:
+                metadata["semantic_memory_context"] = {
+                    "selected_count": len(semantic_context.memories),
+                }
 
         report = {
             "valid": not errors,

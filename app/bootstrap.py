@@ -14,13 +14,15 @@ from app.memory.manager import MemoryManager
 from app.memory.repositories.episodic_memory import (
     EpisodicMemoryRepository,
 )
+from app.memory.repositories.semantic_memory import (
+    SemanticMemoryRepository,
+)
+from app.memory.semantic_manager import SemanticMemoryManager
 
 
 def create_coordinator() -> Coordinator:
     """Build and initialize the NEUROCORE application."""
 
-    # Initialize persistent memory.
-    # Check database integrity before initializing or migrating memory.
     database = SQLiteDatabase(settings.database_path)
 
     database.database_path.parent.mkdir(
@@ -35,9 +37,17 @@ def create_coordinator() -> Coordinator:
 
     database.initialize()
 
+    # Episodic memory.
     repository = EpisodicMemoryRepository(database)
     memory_manager = MemoryManager(repository)
     memory_manager.initialize()
+
+    # Semantic memory uses the same persistent database.
+    semantic_repository = SemanticMemoryRepository(database)
+    semantic_memory_manager = SemanticMemoryManager(
+        semantic_repository
+    )
+    semantic_memory_manager.initialize()
 
     # Register specialized agents.
     registry = AgentRegistry()
@@ -62,4 +72,5 @@ def create_coordinator() -> Coordinator:
         registry=registry,
         authenticator=authenticator,
         memory_manager=memory_manager,
+        semantic_memory_manager=semantic_memory_manager,
     )

@@ -24,7 +24,10 @@ class PlanningAgent(BaseAgent):
             if not isinstance(objective, str) or not objective.strip():
                 raise ValueError("A valid task objective is required.")
 
+            objective = objective.strip()
+
             metadata = {}
+
             steps = [
                 "Validate the requested project directory.",
                 "Verify that the directory is approved for scanning.",
@@ -33,6 +36,7 @@ class PlanningAgent(BaseAgent):
                 "Prepare a summary of the analysis results.",
             ]
 
+            # Evaluate episodic memory context.
             memory_context = message.memory_context
 
             if memory_context is not None:
@@ -43,7 +47,7 @@ class PlanningAgent(BaseAgent):
                     raise ValueError("Memory context recipient mismatch.")
 
                 evaluation = self.memory_evaluator.evaluate(
-                    objective=objective.strip(),
+                    objective=objective,
                     memories=memory_context.memories,
                 )
 
@@ -59,14 +63,12 @@ class PlanningAgent(BaseAgent):
                     for memory in selected_memories
                 )
 
-                # Use successful historical experience.
                 if completed_count:
                     steps.insert(
                         0,
                         "Consider applicable practices from relevant previously completed tasks.",
                     )
 
-                # Add preventive checks based on historical failures.
                 if failed_count:
                     steps.append(
                         "Include preventive checks informed by relevant previously failed tasks.",
@@ -82,9 +84,37 @@ class PlanningAgent(BaseAgent):
                     "failed_count": failed_count,
                 }
 
+            # Validate semantic memory context.
+            semantic_context = message.semantic_context
+
+            if semantic_context is not None:
+                if semantic_context.task_id != message.task_id:
+                    raise ValueError(
+                        "Semantic memory context task ID mismatch."
+                    )
+
+                if semantic_context.recipient_agent != self.name:
+                    raise ValueError(
+                        "Semantic memory context recipient mismatch."
+                    )
+
+                semantic_memory_count = len(
+                    semantic_context.memories
+                )
+
+                if semantic_memory_count:
+                    steps.insert(
+                        0,
+                        "Consider relevant validated semantic knowledge when preparing the plan.",
+                    )
+
+                metadata["semantic_memory_influence"] = {
+                    "selected_count": semantic_memory_count,
+                }
+
             plan = TaskPlan(
                 task_id=message.task_id,
-                objective=objective.strip(),
+                objective=objective,
                 steps=steps,
             )
 
