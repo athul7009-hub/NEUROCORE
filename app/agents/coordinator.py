@@ -15,6 +15,10 @@ from app.core.schemas import (
 )
 from app.memory.context_builder import MemoryContextBuilder
 from app.memory.manager import MemoryManager
+from app.memory.procedural_context_builder import (
+    ProceduralMemoryContextBuilder,
+)
+from app.memory.procedural_manager import ProceduralMemoryManager
 from app.memory.retention_policy import RetentionAssessment
 from app.memory.schemas import (
     EpisodicMemoryRecord,
@@ -37,16 +41,32 @@ class Coordinator:
         authenticator: AgentAuthenticator,
         memory_manager: MemoryManager | None = None,
         semantic_memory_manager: SemanticMemoryManager | None = None,
+        procedural_memory_manager: ProceduralMemoryManager | None = None,
     ):
         self.registry = registry
         self.authenticator = authenticator
         self.communication_policy = CommunicationPolicy()
         self.communication_audit = CommunicationAudit()
+
         self.memory_manager = memory_manager
+        self.semantic_memory_manager = semantic_memory_manager
+        self.procedural_memory_manager = procedural_memory_manager
 
         self.memory_context_builder = (
             MemoryContextBuilder(memory_manager)
             if memory_manager is not None
+            else None
+        )
+
+        self.semantic_context_builder = (
+            SemanticMemoryContextBuilder(semantic_memory_manager)
+            if semantic_memory_manager is not None
+            else None
+        )
+
+        self.procedural_context_builder = (
+            ProceduralMemoryContextBuilder(procedural_memory_manager)
+            if procedural_memory_manager is not None
             else None
         )
 
@@ -89,10 +109,7 @@ class Coordinator:
         if self.memory_manager is None:
             raise RuntimeError("Memory manager is not initialized.")
 
-        logger.info(
-            "Memory archival requested for task %s.",
-            task_id,
-        )
+        logger.info("Memory archival requested for task %s.", task_id)
 
         try:
             archived = self.memory_manager.archive_task(
@@ -101,23 +118,14 @@ class Coordinator:
             )
 
             if archived:
-                logger.info(
-                    "Memory successfully archived for task %s.",
-                    task_id,
-                )
+                logger.info("Memory successfully archived for task %s.", task_id)
             else:
-                logger.warning(
-                    "Memory archival was not completed for task %s.",
-                    task_id,
-                )
+                logger.warning("Memory archival was not completed for task %s.", task_id)
 
             return archived
 
         except Exception:
-            logger.exception(
-                "Memory archival failed for task %s.",
-                task_id,
-            )
+            logger.exception("Memory archival failed for task %s.", task_id)
             raise
 
     def restore_memory(self, task_id: UUID) -> bool:
@@ -126,10 +134,7 @@ class Coordinator:
         if self.memory_manager is None:
             raise RuntimeError("Memory manager is not initialized.")
 
-        logger.info(
-            "Memory restoration requested for task %s.",
-            task_id,
-        )
+        logger.info("Memory restoration requested for task %s.", task_id)
 
         try:
             restored = self.memory_manager.restore_task(
@@ -138,23 +143,14 @@ class Coordinator:
             )
 
             if restored:
-                logger.info(
-                    "Memory successfully restored for task %s.",
-                    task_id,
-                )
+                logger.info("Memory successfully restored for task %s.", task_id)
             else:
-                logger.warning(
-                    "Memory restoration was not completed for task %s.",
-                    task_id,
-                )
+                logger.warning("Memory restoration was not completed for task %s.", task_id)
 
             return restored
 
         except Exception:
-            logger.exception(
-                "Memory restoration failed for task %s.",
-                task_id,
-            )
+            logger.exception("Memory restoration failed for task %s.", task_id)
             raise
 
     def handle_task(self, task: TaskRequest) -> AgentMessage:
@@ -166,20 +162,13 @@ class Coordinator:
             agent_name = self.routes.get(task.intent)
 
             if agent_name is None:
-                raise ValueError(
-                    f"Unsupported task intent: {task.intent}"
-                )
+                raise ValueError(f"Unsupported task intent: {task.intent}")
 
             if task.intent == TaskIntent.FILE_ANALYSIS:
                 directory = task.parameters.get("directory")
 
-                if (
-                    not isinstance(directory, str)
-                    or not directory.strip()
-                ):
-                    raise ValueError(
-                        "A valid directory parameter is required."
-                    )
+                if not isinstance(directory, str) or not directory.strip():
+                    raise ValueError("A valid directory parameter is required.")
 
                 payload = {"directory": directory}
 
@@ -187,16 +176,13 @@ class Coordinator:
                 payload = {"objective": task.user_input}
 
             else:
-                raise ValueError(
-                    f"Unsupported task intent: {task.intent}"
-                )
+                raise ValueError(f"Unsupported task intent: {task.intent}")
 
             agent = self.registry.get(agent_name)
 
-            memory_context = self._build_memory_context(
-                task,
-                agent_name,
-            )
+            memory_context = self._build_memory_context(task, agent_name)
+            semantic_context = self._build_semantic_context(task, agent_name)
+            procedural_context = self._build_procedural_context(task, agent_name)
 
             request = AgentMessage(
                 task_id=task.task_id,
@@ -205,6 +191,8 @@ class Coordinator:
                 message_type=MessageType.TASK,
                 payload=payload,
                 memory_context=memory_context,
+                semantic_context=semantic_context,
+                procedural_context=procedural_context,
             )
 
             self._send_request(request)
@@ -224,9 +212,7 @@ class Coordinator:
             )
 
             if not self.authenticator.verify(signed_response):
-                raise ValueError(
-                    "Agent response authentication failed."
-                )
+                raise ValueError("Agent response authentication failed.")
 
             if (
                 task.intent == TaskIntent.PLAN_TASK
@@ -234,26 +220,15 @@ class Coordinator:
             ):
                 self._verify_plan(task, signed_response)
 
-            self._remember_task(
-                task,
-                agent_name,
-                signed_response,
-            )
+            self._remember_task(task, agent_name, signed_response)
 
             return signed_response
 
         except (ValueError, PermissionError) as error:
-            failure = self._create_error_response(
-                task,
-                str(error),
-            )
+            failure = self._create_error_response(task, str(error))
 
             if agent_name is not None:
-                self._remember_task(
-                    task,
-                    agent_name,
-                    failure,
-                )
+                self._remember_task(task, agent_name, failure)
 
             return failure
 
@@ -269,11 +244,7 @@ class Coordinator:
             )
 
             if agent_name is not None:
-                self._remember_task(
-                    task,
-                    agent_name,
-                    failure,
-                )
+                self._remember_task(task, agent_name, failure)
 
             return failure
 
@@ -282,7 +253,7 @@ class Coordinator:
         task: TaskRequest,
         recipient_agent: str,
     ):
-        """Builds authorized memory context without blocking normal execution."""
+        """Builds authorized episodic memory context."""
 
         if self.memory_context_builder is None:
             return None
@@ -306,7 +277,65 @@ class Coordinator:
 
         except sqlite3.Error:
             logger.warning(
-                "Memory database unavailable; proceeding without context."
+                "Episodic memory database unavailable; proceeding without context."
+            )
+            return None
+
+    def _build_semantic_context(
+        self,
+        task: TaskRequest,
+        recipient_agent: str,
+    ):
+        """Builds authorized semantic memory context for planning tasks."""
+
+        if (
+            self.semantic_context_builder is None
+            or task.intent != TaskIntent.PLAN_TASK
+        ):
+            return None
+
+        try:
+            return self.semantic_context_builder.build_context(
+                task_id=task.task_id,
+                objective=task.user_input,
+                recipient_agent=recipient_agent,
+            )
+
+        except PermissionError:
+            raise
+
+        except sqlite3.Error:
+            logger.warning(
+                "Semantic memory database unavailable; proceeding without context."
+            )
+            return None
+
+    def _build_procedural_context(
+        self,
+        task: TaskRequest,
+        recipient_agent: str,
+    ):
+        """Builds authorized procedural memory context for planning tasks."""
+
+        if (
+            self.procedural_context_builder is None
+            or task.intent != TaskIntent.PLAN_TASK
+        ):
+            return None
+
+        try:
+            return self.procedural_context_builder.build_context(
+                task_id=task.task_id,
+                objective=task.user_input,
+                recipient_agent=recipient_agent,
+            )
+
+        except PermissionError:
+            raise
+
+        except sqlite3.Error:
+            logger.warning(
+                "Procedural memory database unavailable; proceeding without context."
             )
             return None
 
@@ -364,12 +393,17 @@ class Coordinator:
         """Requires independent verification before accepting a plan."""
 
         verification_agent_name = "VerificationAgent"
-
-        verification_agent = self.registry.get(
-            verification_agent_name
-        )
+        verification_agent = self.registry.get(verification_agent_name)
 
         verification_context = self._build_memory_context(
+            task,
+            verification_agent_name,
+        )
+        semantic_context = self._build_semantic_context(
+            task,
+            verification_agent_name,
+        )
+        procedural_context = self._build_procedural_context(
             task,
             verification_agent_name,
         )
@@ -385,6 +419,8 @@ class Coordinator:
                 )
             },
             memory_context=verification_context,
+            semantic_context=semantic_context,
+            procedural_context=procedural_context,
         )
 
         self._send_request(verification_request)
@@ -406,14 +442,10 @@ class Coordinator:
         )
 
         if not self.authenticator.verify(signed_verification):
-            raise ValueError(
-                "Verification response authentication failed."
-            )
+            raise ValueError("Verification response authentication failed.")
 
         if signed_verification.message_type != MessageType.RESULT:
-            raise ValueError(
-                "VerificationAgent did not return a valid result."
-            )
+            raise ValueError("VerificationAgent did not return a valid result.")
 
         report = signed_verification.payload
 
@@ -421,31 +453,21 @@ class Coordinator:
             raise ValueError("Invalid verification report.")
 
         if type(report.get("valid")) is not bool:
-            raise ValueError(
-                "Verification report has an invalid status."
-            )
+            raise ValueError("Verification report has an invalid status.")
 
         if report["valid"] is not True:
-            raise ValueError(
-                "Planning result failed verification."
-            )
+            raise ValueError("Planning result failed verification.")
 
         if report.get("source_agent") != "PlanningAgent":
-            raise ValueError(
-                "Verification report source mismatch."
-            )
+            raise ValueError("Verification report source mismatch.")
 
         if report.get("task_id") != str(task.task_id):
-            raise ValueError(
-                "Verification report task ID mismatch."
-            )
+            raise ValueError("Verification report task ID mismatch.")
 
         errors = report.get("errors")
 
         if type(errors) is not list or errors:
-            raise ValueError(
-                "Verification report contains errors."
-            )
+            raise ValueError("Verification report contains errors.")
 
     @staticmethod
     def _create_error_response(
@@ -482,9 +504,7 @@ class Coordinator:
 
             if agent_name == "FileAnalysisAgent":
                 total_files = response.payload.get("total_files")
-                duplicate_groups = response.payload.get(
-                    "duplicate_groups"
-                )
+                duplicate_groups = response.payload.get("duplicate_groups")
 
                 if (
                     type(total_files) is not int

@@ -1,3 +1,4 @@
+
 import sqlite3
 
 from app.agents.coordinator import Coordinator
@@ -18,6 +19,11 @@ from app.memory.repositories.semantic_memory import (
     SemanticMemoryRepository,
 )
 from app.memory.semantic_manager import SemanticMemoryManager
+
+from app.memory.repositories.procedural_memory import (
+    ProceduralMemoryRepository,
+)
+from app.memory.procedural_manager import ProceduralMemoryManager
 
 
 def create_coordinator() -> Coordinator:
@@ -42,12 +48,19 @@ def create_coordinator() -> Coordinator:
     memory_manager = MemoryManager(repository)
     memory_manager.initialize()
 
-    # Semantic memory uses the same persistent database.
+    # Semantic memory.
     semantic_repository = SemanticMemoryRepository(database)
     semantic_memory_manager = SemanticMemoryManager(
         semantic_repository
     )
     semantic_memory_manager.initialize()
+
+    # Procedural memory.
+    procedural_repository = ProceduralMemoryRepository(database)
+    procedural_memory_manager = ProceduralMemoryManager(
+        procedural_repository
+    )
+    procedural_memory_manager.initialize()
 
     # Register specialized agents.
     registry = AgentRegistry()
@@ -73,4 +86,5 @@ def create_coordinator() -> Coordinator:
         authenticator=authenticator,
         memory_manager=memory_manager,
         semantic_memory_manager=semantic_memory_manager,
+        procedural_memory_manager=procedural_memory_manager,
     )

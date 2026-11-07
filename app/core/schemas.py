@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.memory.context_schemas import MemoryContext
 from app.memory.semantic_context_schemas import SemanticMemoryContext
+from app.memory.procedural_context_schemas import ProceduralMemoryContext
 
 
 def current_timestamp() -> datetime:
@@ -100,6 +101,9 @@ class AgentMessage(BaseModel):
 
     # Validated semantic memory context
     semantic_context: SemanticMemoryContext | None = None
+
+    # Validated procedural memory context
+    procedural_context: ProceduralMemoryContext | None = None
 
     in_reply_to: UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

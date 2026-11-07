@@ -98,9 +98,7 @@ class PlanningAgent(BaseAgent):
                         "Semantic memory context recipient mismatch."
                     )
 
-                semantic_memory_count = len(
-                    semantic_context.memories
-                )
+                semantic_memory_count = len(semantic_context.memories)
 
                 if semantic_memory_count:
                     steps.insert(
@@ -110,6 +108,53 @@ class PlanningAgent(BaseAgent):
 
                 metadata["semantic_memory_influence"] = {
                     "selected_count": semantic_memory_count,
+                }
+
+            # Validate and apply procedural memory context.
+            procedural_context = message.procedural_context
+
+            if procedural_context is not None:
+                if procedural_context.task_id != message.task_id:
+                    raise ValueError(
+                        "Procedural memory context task ID mismatch."
+                    )
+
+                if procedural_context.recipient_agent != self.name:
+                    raise ValueError(
+                        "Procedural memory context recipient mismatch."
+                    )
+
+                selected_procedures = procedural_context.memories
+
+                if selected_procedures:
+                    steps.insert(
+                        0,
+                        "Apply relevant validated procedures where their usage conditions match this task.",
+                    )
+
+                    procedure_steps = []
+
+                    for procedure in selected_procedures:
+                        procedure_steps.append(
+                            f"Apply procedure '{procedure.name}': "
+                            f"{procedure.description}"
+                        )
+
+                        for procedure_step in procedure.steps[:3]:
+                            procedure_steps.append(
+                                f"Procedure guidance: "
+                                f"{procedure_step.instruction}"
+                            )
+
+                    # Keep the generated plan bounded.
+                    steps[0:0] = procedure_steps[:10]
+
+                metadata["procedural_memory_influence"] = {
+                    "selected_count": len(selected_procedures),
+                    "procedure_names": [
+                        procedure.name
+                        for procedure in selected_procedures
+                    ],
                 }
 
             plan = TaskPlan(
