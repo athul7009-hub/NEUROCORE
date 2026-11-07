@@ -24,7 +24,9 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     database_path: Path = PROJECT_ROOT / "data" / "neurocore.db"
-
+    memory_retention_min_age_days: int = Field(default=90, ge=1)
+    memory_retention_inactivity_days: int = Field(default=90, ge=1)
+    memory_automatic_archival_enabled: bool = False
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",

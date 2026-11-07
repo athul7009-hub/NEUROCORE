@@ -1,9 +1,10 @@
-
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.memory.database import SQLiteDatabase
 from app.memory.schemas import (
     EpisodicMemoryRecord,
+    MemoryLifecycleStatus,
     MemorySensitivity,
     MemorySource,
     MemoryStatus,
@@ -11,7 +12,7 @@ from app.memory.schemas import (
 
 
 class EpisodicMemoryRepository:
-    """Stores and retrieves completed or failed task history."""
+    """Stores and retrieves episodic task history."""
 
     def __init__(self, database: SQLiteDatabase):
         self.database = database
@@ -32,7 +33,13 @@ class EpisodicMemoryRepository:
                     completed_at TEXT NOT NULL,
                     sensitivity TEXT NOT NULL
                         DEFAULT 'legacy_unclassified',
-                    source TEXT NOT NULL DEFAULT 'legacy'
+                    source TEXT NOT NULL DEFAULT 'legacy',
+                    lifecycle_status TEXT NOT NULL DEFAULT 'active',
+                    archived_at TEXT,
+                    use_count INTEGER NOT NULL DEFAULT 0,
+                    last_used_at TEXT,
+                    usage_tracked INTEGER NOT NULL DEFAULT 0,
+                    is_protected INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -52,8 +59,32 @@ class EpisodicMemoryRepository:
                 ),
                 "source": (
                     "ALTER TABLE episodic_memory "
-                    "ADD COLUMN source TEXT NOT NULL "
-                    "DEFAULT 'legacy'"
+                    "ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'"
+                ),
+                "lifecycle_status": (
+                    "ALTER TABLE episodic_memory "
+                    "ADD COLUMN lifecycle_status TEXT NOT NULL "
+                    "DEFAULT 'active'"
+                ),
+                "archived_at": (
+                    "ALTER TABLE episodic_memory "
+                    "ADD COLUMN archived_at TEXT"
+                ),
+                "use_count": (
+                    "ALTER TABLE episodic_memory "
+                    "ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0"
+                ),
+                "last_used_at": (
+                    "ALTER TABLE episodic_memory "
+                    "ADD COLUMN last_used_at TEXT"
+                ),
+                "usage_tracked": (
+                    "ALTER TABLE episodic_memory "
+                    "ADD COLUMN usage_tracked INTEGER NOT NULL DEFAULT 0"
+                ),
+                "is_protected": (
+                    "ALTER TABLE episodic_memory "
+                    "ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0"
                 ),
             }
 
@@ -68,17 +99,12 @@ class EpisodicMemoryRepository:
             connection.execute(
                 """
                 INSERT INTO episodic_memory (
-                    task_id,
-                    intent,
-                    status,
-                    agent_name,
-                    summary,
-                    created_at,
-                    completed_at,
-                    sensitivity,
-                    source
+                    task_id, intent, status, agent_name, summary,
+                    created_at, completed_at, sensitivity, source,
+                    lifecycle_status, archived_at, use_count,
+                    last_used_at, usage_tracked, is_protected
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(record.task_id),
@@ -90,22 +116,41 @@ class EpisodicMemoryRepository:
                     record.completed_at.isoformat(),
                     record.sensitivity.value,
                     record.source.value,
+                    record.lifecycle_status.value,
+                    (
+                        record.archived_at.isoformat()
+                        if record.archived_at else None
+                    ),
+                    record.use_count,
+                    (
+                        record.last_used_at.isoformat()
+                        if record.last_used_at else None
+                    ),
+                    int(record.usage_tracked),
+                    int(record.is_protected),
                 ),
             )
 
-    def get(self, task_id: UUID) -> EpisodicMemoryRecord | None:
-        """Retrieves one memory record by task ID."""
+    def get(
+        self,
+        task_id: UUID,
+        *,
+        include_archived: bool = False,
+    ) -> EpisodicMemoryRecord | None:
+        """Retrieves a memory by task ID."""
+
+        query = "SELECT * FROM episodic_memory WHERE task_id = ?"
+
+        if not include_archived:
+            query += " AND lifecycle_status = 'active'"
 
         with self.database.connection() as connection:
             row = connection.execute(
-                "SELECT * FROM episodic_memory WHERE task_id = ?",
+                query,
                 (str(task_id),),
             ).fetchone()
 
-        if row is None:
-            return None
-
-        return self._to_record(row)
+        return self._to_record(row) if row else None
 
     def get_recent(
         self,
@@ -114,8 +159,9 @@ class EpisodicMemoryRepository:
         status: MemoryStatus | None = None,
         agent_name: str | None = None,
         offset: int = 0,
+        include_archived: bool = False,
     ) -> list[EpisodicMemoryRecord]:
-        """Retrieves a page of recent memories with optional filters."""
+        """Retrieves recent memories with optional filters."""
 
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("Limit must be an integer.")
@@ -128,6 +174,9 @@ class EpisodicMemoryRepository:
 
         if offset < 0:
             raise ValueError("Offset cannot be negative.")
+
+        if not isinstance(include_archived, bool):
+            raise TypeError("include_archived must be a boolean.")
 
         if intent is not None:
             if not isinstance(intent, str):
@@ -146,6 +195,9 @@ class EpisodicMemoryRepository:
 
         conditions = []
         parameters = []
+
+        if not include_archived:
+            conditions.append("lifecycle_status = 'active'")
 
         if intent is not None:
             conditions.append("intent = ?")
@@ -179,6 +231,26 @@ class EpisodicMemoryRepository:
 
         return [self._to_record(row) for row in rows]
 
+    def record_usage(self, task_id: UUID) -> bool:
+        """Records actual use of an active memory."""
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self.database.connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE episodic_memory
+                SET use_count = use_count + 1,
+                    last_used_at = ?,
+                    usage_tracked = 1
+                WHERE task_id = ?
+                  AND lifecycle_status = 'active'
+                """,
+                (now, str(task_id)),
+            )
+
+        return cursor.rowcount == 1
+
     @staticmethod
     def _to_record(row) -> EpisodicMemoryRecord:
         """Converts a database row into a validated memory record."""
@@ -193,4 +265,12 @@ class EpisodicMemoryRepository:
             completed_at=row["completed_at"],
             sensitivity=MemorySensitivity(row["sensitivity"]),
             source=MemorySource(row["source"]),
+            lifecycle_status=MemoryLifecycleStatus(
+                row["lifecycle_status"]
+            ),
+            archived_at=row["archived_at"],
+            use_count=row["use_count"],
+            last_used_at=row["last_used_at"],
+            usage_tracked=bool(row["usage_tracked"]),
+            is_protected=bool(row["is_protected"]),
         )

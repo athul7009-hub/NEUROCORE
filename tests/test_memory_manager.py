@@ -286,3 +286,12 @@ def test_system_source_is_accepted(manager):
 
     assert stored_record is not None
     assert stored_record.source == MemorySource.SYSTEM
+def test_record_usage_requires_trusted_agent(manager):
+    record = create_record()
+    manager.remember_task(record)
+
+    with pytest.raises(PermissionError, match="Unauthorized"):
+        manager.record_usage(
+            [record.task_id],
+            requesting_agent="UnknownAgent",
+        )

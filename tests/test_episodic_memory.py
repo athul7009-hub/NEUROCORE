@@ -304,3 +304,111 @@ def test_memory_persists_after_database_restart(tmp_path):
     retrieved = second_repository.get(record.task_id)
 
     assert retrieved == record
+def test_lifecycle_metadata_round_trip(repository):
+    from app.memory.schemas import MemoryLifecycleStatus
+
+    record = create_record().model_copy(
+        update={
+            "lifecycle_status": MemoryLifecycleStatus.ACTIVE,
+            "use_count": 3,
+            "usage_tracked": True,
+            "is_protected": True,
+        }
+    )
+
+    repository.save(record)
+    retrieved = repository.get(record.task_id)
+
+    assert retrieved == record
+
+
+def test_legacy_memory_gets_safe_lifecycle_defaults(tmp_path):
+    database = SQLiteDatabase(tmp_path / "legacy.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE episodic_memory (
+                task_id TEXT PRIMARY KEY,
+                intent TEXT NOT NULL,
+                status TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL
+            )
+            """
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        connection.execute(
+            """
+            INSERT INTO episodic_memory
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                "file_analysis",
+                "completed",
+                "FileAnalysisAgent",
+                "Legacy memory.",
+                now,
+                now,
+            ),
+        )
+
+    repository = EpisodicMemoryRepository(database)
+    repository.initialize()
+
+    record = repository.get_recent(limit=1)[0]
+
+    assert record.lifecycle_status.value == "active"
+    assert record.use_count == 0
+    assert record.usage_tracked is False
+    assert record.is_protected is False
+    assert record.archived_at is None
+
+
+def test_record_usage_updates_memory(repository):
+    record = create_record()
+    repository.save(record)
+
+    assert repository.record_usage(record.task_id) is True
+
+    retrieved = repository.get(record.task_id)
+
+    assert retrieved.use_count == 1
+    assert retrieved.last_used_at is not None
+    assert retrieved.usage_tracked is True
+
+
+def test_normal_retrieval_excludes_archived_memory(repository):
+    from app.memory.schemas import MemoryLifecycleStatus
+
+    record = create_record()
+    repository.save(record)
+
+    with repository.database.connection() as connection:
+        connection.execute(
+            """
+            UPDATE episodic_memory
+            SET lifecycle_status = ?
+            WHERE task_id = ?
+            """,
+            (
+                MemoryLifecycleStatus.ARCHIVED.value,
+                str(record.task_id),
+            ),
+        )
+
+    assert repository.get(record.task_id) is None
+
+    archived = repository.get(
+        record.task_id,
+        include_archived=True,
+    )
+
+    assert archived is not None
+    assert archived.lifecycle_status == MemoryLifecycleStatus.ARCHIVED

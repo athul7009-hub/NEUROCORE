@@ -1,4 +1,3 @@
-
 from uuid import UUID
 
 from app.memory.context_schemas import (
@@ -60,6 +59,11 @@ class MemoryContextBuilder:
             intent=intent.strip(),
         )
 
+        records = [
+            record for record in records
+            if record.task_id != task_id
+        ]
+
         memories = [
             MemoryContextItem(
                 source_task_id=record.task_id,
@@ -70,7 +74,6 @@ class MemoryContextBuilder:
                 completed_at=record.completed_at,
             )
             for record in records
-            if record.task_id != task_id
         ]
 
         if objective is not None:
@@ -80,8 +83,19 @@ class MemoryContextBuilder:
             )
             memories = evaluation.selected_memories
 
+        selected_memories = memories[:limit]
+
+        if selected_memories:
+            self.memory_manager.record_usage(
+                [
+                    memory.source_task_id
+                    for memory in selected_memories
+                ],
+                requesting_agent=recipient_agent,
+            )
+
         return MemoryContext(
             task_id=task_id,
             recipient_agent=recipient_agent,
-            memories=memories[:limit],
+            memories=selected_memories,
         )

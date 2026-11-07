@@ -1,4 +1,3 @@
-
 from uuid import UUID
 
 from app.memory.repositories.episodic_memory import (
@@ -25,8 +24,6 @@ class MemoryManager:
         self.policy = policy or MemoryPolicy()
 
     def initialize(self) -> None:
-        """Initializes the memory storage."""
-
         self.repository.initialize()
 
     def remember_task(
@@ -35,8 +32,6 @@ class MemoryManager:
         sensitivity: MemorySensitivity = MemorySensitivity.INTERNAL,
         source: MemorySource = MemorySource.COORDINATOR,
     ) -> None:
-        """Stores a task memory if it satisfies the storage policy."""
-
         if not isinstance(record, EpisodicMemoryRecord):
             raise TypeError("Expected an EpisodicMemoryRecord.")
 
@@ -53,8 +48,6 @@ class MemoryManager:
         self.repository.save(approved_record)
 
     def _authorize_requester(self, requesting_agent: str) -> None:
-        """Rejects agents that are not trusted to retrieve memory."""
-
         if (
             not isinstance(requesting_agent, str)
             or not requesting_agent.strip()
@@ -68,8 +61,6 @@ class MemoryManager:
         *,
         requesting_agent: str,
     ) -> EpisodicMemoryRecord | None:
-        """Retrieves a task memory after authorization."""
-
         self._authorize_requester(requesting_agent)
 
         record = self.repository.get(task_id)
@@ -91,8 +82,6 @@ class MemoryManager:
         status: MemoryStatus | None = None,
         agent_name: str | None = None,
     ) -> list[EpisodicMemoryRecord]:
-        """Retrieves the requested number of authorized recent memories."""
-
         self._authorize_requester(requesting_agent)
 
         if isinstance(limit, bool) or not isinstance(limit, int):
@@ -132,3 +121,31 @@ class MemoryManager:
                 break
 
         return authorized_records[:limit]
+
+    def record_usage(
+        self,
+        task_ids: list[UUID],
+        *,
+        requesting_agent: str,
+    ) -> None:
+        """Records usage only for memories authorized for the agent."""
+
+        self._authorize_requester(requesting_agent)
+
+        if not isinstance(task_ids, list):
+            raise TypeError("Task IDs must be provided as a list.")
+
+        for task_id in set(task_ids):
+            if not isinstance(task_id, UUID):
+                raise TypeError("Every task ID must be a UUID.")
+
+            record = self.repository.get(task_id)
+
+            if (
+                record is not None
+                and self.policy.evaluate_retrieval(
+                    record,
+                    requesting_agent,
+                )
+            ):
+                self.repository.record_usage(task_id)
