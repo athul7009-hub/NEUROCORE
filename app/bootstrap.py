@@ -1,9 +1,6 @@
 
 import sqlite3
-from app.memory.repositories.working_memory import (
-    WorkingMemoryRepository,
-)
-from app.memory.working_manager import WorkingMemoryManager
+
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
 from app.agents.planning_agent import PlanningAgent
@@ -14,10 +11,12 @@ from app.core.agent_auth import AgentAuthenticator
 from app.core.config import settings
 
 from app.memory.database import SQLiteDatabase
+
 from app.memory.manager import MemoryManager
 from app.memory.repositories.episodic_memory import (
     EpisodicMemoryRepository,
 )
+
 from app.memory.repositories.semantic_memory import (
     SemanticMemoryRepository,
 )
@@ -27,6 +26,16 @@ from app.memory.repositories.procedural_memory import (
     ProceduralMemoryRepository,
 )
 from app.memory.procedural_manager import ProceduralMemoryManager
+
+from app.memory.repositories.working_memory import (
+    WorkingMemoryRepository,
+)
+from app.memory.working_manager import WorkingMemoryManager
+
+from app.memory.repositories.prospective_memory import (
+    ProspectiveMemoryRepository,
+)
+from app.memory.prospective_manager import ProspectiveMemoryManager
 
 
 def create_coordinator() -> Coordinator:
@@ -71,6 +80,14 @@ def create_coordinator() -> Coordinator:
         working_repository
     )
     working_memory_manager.initialize()
+
+    # Prospective memory.
+    prospective_repository = ProspectiveMemoryRepository(database)
+    prospective_memory_manager = ProspectiveMemoryManager(
+        prospective_repository
+    )
+    prospective_memory_manager.initialize()
+
     # Register specialized agents.
     registry = AgentRegistry()
     registry.register(FileAnalysisAgent())
@@ -97,4 +114,5 @@ def create_coordinator() -> Coordinator:
         semantic_memory_manager=semantic_memory_manager,
         procedural_memory_manager=procedural_memory_manager,
         working_memory_manager=working_memory_manager,
+        prospective_memory_manager=prospective_memory_manager,
     )

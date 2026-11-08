@@ -181,6 +181,32 @@ class PlanningAgent(BaseAgent):
                     "selected_count": working_entry_count,
                 }
 
+            # Validate prospective memory context.
+            prospective_context = message.prospective_context
+
+            if prospective_context is not None:
+                if prospective_context.task_id != message.task_id:
+                    raise ValueError(
+                        "Prospective memory context task ID mismatch."
+                    )
+
+                if prospective_context.recipient_agent != self.name:
+                    raise ValueError(
+                        "Prospective memory context recipient mismatch."
+                    )
+
+                intention_count = len(prospective_context.memories)
+
+                if intention_count:
+                    steps.insert(
+                        0,
+                        "Consider relevant pending intentions when preparing the plan.",
+                    )
+
+                metadata["prospective_memory_influence"] = {
+                    "selected_count": intention_count,
+                }
+
             plan = TaskPlan(
                 task_id=message.task_id,
                 objective=objective,

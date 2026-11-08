@@ -19,6 +19,10 @@ from app.memory.procedural_context_builder import (
     ProceduralMemoryContextBuilder,
 )
 from app.memory.procedural_manager import ProceduralMemoryManager
+from app.memory.prospective_context_builder import (
+    ProspectiveMemoryContextBuilder,
+)
+from app.memory.prospective_manager import ProspectiveMemoryManager
 from app.memory.retention_policy import RetentionAssessment
 from app.memory.schemas import (
     EpisodicMemoryRecord,
@@ -47,6 +51,7 @@ class Coordinator:
         semantic_memory_manager: SemanticMemoryManager | None = None,
         procedural_memory_manager: ProceduralMemoryManager | None = None,
         working_memory_manager: WorkingMemoryManager | None = None,
+        prospective_memory_manager: ProspectiveMemoryManager | None = None,
     ):
         self.registry = registry
         self.authenticator = authenticator
@@ -57,6 +62,7 @@ class Coordinator:
         self.semantic_memory_manager = semantic_memory_manager
         self.procedural_memory_manager = procedural_memory_manager
         self.working_memory_manager = working_memory_manager
+        self.prospective_memory_manager = prospective_memory_manager
 
         self.memory_context_builder = (
             MemoryContextBuilder(memory_manager)
@@ -79,6 +85,12 @@ class Coordinator:
         self.working_context_builder = (
             WorkingMemoryContextBuilder(working_memory_manager)
             if working_memory_manager is not None
+            else None
+        )
+
+        self.prospective_context_builder = (
+            ProspectiveMemoryContextBuilder(prospective_memory_manager)
+            if prospective_memory_manager is not None
             else None
         )
 
@@ -235,6 +247,10 @@ class Coordinator:
                 task,
                 agent_name,
             )
+            prospective_context = self._build_prospective_context(
+                task,
+                agent_name,
+            )
 
             request = AgentMessage(
                 task_id=task.task_id,
@@ -246,6 +262,7 @@ class Coordinator:
                 semantic_context=semantic_context,
                 procedural_context=procedural_context,
                 working_memory_context=working_context,
+                prospective_context=prospective_context,
             )
 
             self._send_request(request)
@@ -316,7 +333,11 @@ class Coordinator:
         recipient_agent: str,
     ):
         """Builds authorized episodic memory context."""
-
+        if (
+            self.memory_context_builder is None
+            or recipient_agent == "FileAnalysisAgent"
+        ):
+            return None
         if self.memory_context_builder is None:
             return None
 
@@ -410,7 +431,11 @@ class Coordinator:
         recipient_agent: str,
     ):
         """Builds isolated working memory context for the current task."""
-
+        if (
+            self.working_context_builder is None
+            or task.intent != TaskIntent.PLAN_TASK
+        ):
+            return None
         if self.working_context_builder is None:
             return None
 
@@ -426,6 +451,36 @@ class Coordinator:
         except sqlite3.Error:
             logger.warning(
                 "Working memory database unavailable; "
+                "proceeding without context."
+            )
+            return None
+
+    def _build_prospective_context(
+        self,
+        task: TaskRequest,
+        recipient_agent: str,
+    ):
+        """Builds authorized prospective memory context for planning tasks."""
+
+        if (
+            self.prospective_context_builder is None
+            or task.intent != TaskIntent.PLAN_TASK
+        ):
+            return None
+
+        try:
+            return self.prospective_context_builder.build_context(
+                task_id=task.task_id,
+                objective=task.user_input,
+                recipient_agent=recipient_agent,
+            )
+
+        except PermissionError:
+            raise
+
+        except sqlite3.Error:
+            logger.warning(
+                "Prospective memory database unavailable; "
                 "proceeding without context."
             )
             return None
@@ -504,6 +559,10 @@ class Coordinator:
             task,
             verification_agent_name,
         )
+        prospective_context = self._build_prospective_context(
+            task,
+            verification_agent_name,
+        )
 
         verification_request = AgentMessage(
             task_id=task.task_id,
@@ -519,6 +578,7 @@ class Coordinator:
             semantic_context=semantic_context,
             procedural_context=procedural_context,
             working_memory_context=working_context,
+            prospective_context=prospective_context,
         )
 
         self._send_request(verification_request)

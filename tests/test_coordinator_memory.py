@@ -83,7 +83,7 @@ def test_successful_file_analysis_is_remembered(memory_manager):
         task.task_id,
         requesting_agent="CoordinatorAgent",
     )
-
+    print("COORDINATOR ERROR:", response.payload)
     assert response.message_type == MessageType.RESULT
     assert memory is not None
     assert memory.status == MemoryStatus.COMPLETED

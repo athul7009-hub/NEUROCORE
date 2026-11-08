@@ -154,6 +154,25 @@ class VerificationAgent(BaseAgent):
                     "selected_count": len(working_context.entries),
                 }
 
+        # Validate optional prospective memory context.
+        prospective_context = message.prospective_context
+
+        if prospective_context is not None:
+            if prospective_context.task_id != message.task_id:
+                errors.append(
+                    "Prospective memory context task ID mismatch."
+                )
+
+            elif prospective_context.recipient_agent != self.name:
+                errors.append(
+                    "Prospective memory context recipient mismatch."
+                )
+
+            else:
+                metadata["prospective_memory_context"] = {
+                    "selected_count": len(prospective_context.memories),
+                }
+
         report = {
             "valid": not errors,
             "source_agent": (

@@ -9,7 +9,7 @@ from app.memory.working_schemas import WorkingMemoryContext
 from app.memory.context_schemas import MemoryContext
 from app.memory.semantic_context_schemas import SemanticMemoryContext
 from app.memory.procedural_context_schemas import ProceduralMemoryContext
-
+from app.memory.prospective_context_schemas import ProspectiveMemoryContext
 
 def current_timestamp() -> datetime:
     return datetime.now(timezone.utc)
@@ -105,7 +105,9 @@ class AgentMessage(BaseModel):
     # Validated procedural memory context
     procedural_context: ProceduralMemoryContext | None = None
 
-     # Task-scoped temporary working memory context
+    # Pending future-intention context
+    prospective_context: ProspectiveMemoryContext | None = None
+    # Task-scoped temporary working memory context
     working_memory_context: WorkingMemoryContext | None = None
 
     in_reply_to: UUID | None = None

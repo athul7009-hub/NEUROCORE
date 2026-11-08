@@ -6,8 +6,17 @@ from app.core.schemas import AgentMessage, MessageType
 
 class CommunicationPolicy:
     """
-    Controls which request payload fields an agent may receive.
+    Controls which request payload fields and memory contexts
+    an agent may receive.
     """
+
+    CONTEXT_FIELDS = (
+        "memory_context",
+        "semantic_context",
+        "procedural_context",
+        "working_memory_context",
+        "prospective_context",
+    )
 
     def __init__(self, max_payload_bytes: int = 64 * 1024):
         if max_payload_bytes <= 0:
@@ -21,6 +30,12 @@ class CommunicationPolicy:
             "VerificationAgent": {"planning_result"},
         }
 
+        self.allowed_contexts = {
+            "FileAnalysisAgent": set(),
+            "PlanningAgent": set(self.CONTEXT_FIELDS),
+            "VerificationAgent": set(self.CONTEXT_FIELDS),
+        }
+
     def validate_outgoing(self, message: AgentMessage) -> None:
         if message.message_type != MessageType.TASK:
             raise ValueError(
@@ -28,7 +43,9 @@ class CommunicationPolicy:
             )
 
         if message.sender != "Coordinator":
-            raise ValueError("Only the Coordinator may send task requests.")
+            raise ValueError(
+                "Only the Coordinator may send task requests."
+            )
 
         allowed = self.allowed_fields.get(message.recipient)
 
@@ -37,6 +54,31 @@ class CommunicationPolicy:
                 f"No communication policy for {message.recipient}."
             )
 
+        # Validate memory context permissions and isolation.
+        allowed_contexts = self.allowed_contexts[message.recipient]
+
+        for field in self.CONTEXT_FIELDS:
+            context = getattr(message, field)
+
+            if context is None:
+                continue
+
+            if field not in allowed_contexts:
+                raise ValueError(
+                    f"Unauthorized memory context: {field}."
+                )
+
+            if context.task_id != message.task_id:
+                raise ValueError(
+                    f"{field} task ID mismatch."
+                )
+
+            if context.recipient_agent != message.recipient:
+                raise ValueError(
+                    f"{field} recipient mismatch."
+                )
+
+        # Validate ordinary payload fields.
         supplied_fields = set(message.payload.keys())
         unexpected_fields = supplied_fields - allowed
 
@@ -57,7 +99,9 @@ class CommunicationPolicy:
                 allow_nan=False,
             ).encode("utf-8")
         except (TypeError, ValueError) as error:
-            raise ValueError("Payload must contain valid JSON data.") from error
+            raise ValueError(
+                "Payload must contain valid JSON data."
+            ) from error
 
         if len(serialized) > self.max_payload_bytes:
             raise ValueError(
