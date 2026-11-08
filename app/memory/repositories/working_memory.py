@@ -195,7 +195,15 @@ class WorkingMemoryRepository:
         return [self._to_record(row) for row in rows]
 
     def update(self, record: WorkingMemoryRecord) -> bool:
-        """Updates an existing entry without changing its identity."""
+        """Updates an active entry without changing its identity or owner."""
+
+        now = datetime.now(timezone.utc).isoformat()
+        updated_at = self._utc_iso(record.updated_at)
+        expires_at = self._utc_iso(record.expires_at)
+
+        # Never allow an expired record to be updated or revived.
+        if expires_at <= now:
+            return False
 
         with self.database.connection() as connection:
             cursor = connection.execute(
@@ -204,23 +212,27 @@ class WorkingMemoryRepository:
                 SET key = ?,
                     entry_type = ?,
                     content = ?,
-                    source_agent = ?,
                     sensitivity = ?,
                     updated_at = ?,
                     expires_at = ?
                 WHERE entry_id = ?
                   AND task_id = ?
+                  AND source_agent = ?
+                  AND expires_at > ?
+                  AND updated_at <= ?
                 """,
                 (
                     record.key,
                     record.entry_type.value,
                     json.dumps(record.content),
-                    record.source_agent,
                     record.sensitivity.value,
-                    self._utc_iso(record.updated_at),
-                    self._utc_iso(record.expires_at),
+                    updated_at,
+                    expires_at,
                     str(record.entry_id),
                     str(record.task_id),
+                    record.source_agent,
+                    now,
+                    updated_at,
                 ),
             )
 

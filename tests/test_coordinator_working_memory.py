@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
-
+from app.core.schemas import AgentMessage, MessageType
 from app.agents.coordinator import Coordinator
 from app.agents.planning_agent import PlanningAgent
 from app.agents.registry import AgentRegistry
@@ -236,3 +236,54 @@ def test_coordinator_rejects_working_memory_authorization_failure(
     assert "unauthorized" in response.payload["error"].lower()
 
     planning_mock.assert_not_called()
+
+def test_working_memory_content_is_not_promoted_to_episodic_memory(
+    tmp_path,
+):
+    manager = create_working_memory_manager(tmp_path)
+    coordinator, _, _ = create_test_coordinator(tmp_path, manager)
+
+    class MemoryCapture:
+        def __init__(self):
+            self.records = []
+
+        def remember_task(self, record):
+            self.records.append(record)
+
+    memory_capture = MemoryCapture()
+    coordinator.memory_manager = memory_capture
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    private_content = "TEMPORARY_INTERNAL_OBSERVATION_8472"
+
+    response = AgentMessage(
+        task_id=task.task_id,
+        sender="PlanningAgent",
+        recipient="Coordinator",
+        message_type=MessageType.RESULT,
+        payload={
+            "steps": [
+                "Analyze requirements",
+                "Create implementation plan",
+            ],
+            "temporary_data": private_content,
+        },
+    )
+
+    coordinator._remember_task(
+        task,
+        "PlanningAgent",
+        response,
+    )
+
+    assert len(memory_capture.records) == 1
+
+    episodic_record = memory_capture.records[0]
+
+    assert episodic_record.status.value == "completed"
+    assert private_content not in episodic_record.summary
+    assert "2 steps" in episodic_record.summary

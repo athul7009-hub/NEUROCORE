@@ -353,3 +353,139 @@ def test_search_rejects_empty_source_agent(repository):
             task_id=uuid4(),
             source_agent=" ",
         )
+
+def test_update_cannot_revive_expired_entry(repository):
+    record = create_record(expires_in=-1)
+    repository.save(record)
+
+    revived = record.model_copy(
+        update={
+            "updated_at": datetime.now(timezone.utc),
+            "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        }
+    )
+
+    assert repository.update(revived) is False
+
+
+def test_update_cannot_change_original_owner(repository):
+    record = create_record(source_agent="PlanningAgent")
+    repository.save(record)
+
+    forged = record.model_copy(
+        update={
+            "source_agent": "VerificationAgent",
+            "updated_at": datetime.now(timezone.utc) + timedelta(seconds=1),
+        }
+    )
+
+    assert repository.update(forged) is False
+
+    retrieved = repository.get(record.entry_id, record.task_id)
+
+    assert retrieved is not None
+    assert retrieved.source_agent == "PlanningAgent"
+
+
+def test_update_rejects_backdated_timestamp(repository):
+    record = create_record()
+    repository.save(record)
+
+    newer_timestamp = record.created_at + timedelta(seconds=2)
+
+    newer_record = record.model_copy(
+        update={"updated_at": newer_timestamp}
+    )
+
+    assert repository.update(newer_record) is True
+
+    older_record = record.model_copy(
+        update={
+            "updated_at": record.created_at + timedelta(seconds=1),
+            "content": {"result": "stale update"},
+        }
+    )
+
+    assert repository.update(older_record) is False
+
+    retrieved = repository.get(record.entry_id, record.task_id)
+
+    assert retrieved is not None
+    assert retrieved.updated_at == newer_timestamp
+    assert retrieved.content == record.content
+
+from concurrent.futures import ThreadPoolExecutor
+
+
+def test_concurrent_saves_preserve_all_entries(repository):
+    task_id = uuid4()
+    records = [
+        create_record(task_id=task_id, key=f"entry_{index}")
+        for index in range(20)
+    ]
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        list(executor.map(repository.save, records))
+
+    results = repository.search(task_id=task_id, limit=100)
+
+    assert len(results) == 20
+    assert {record.entry_id for record in results} == {
+        record.entry_id for record in records
+    }
+
+
+def test_concurrent_reads_and_writes_preserve_task_isolation(repository):
+    task_id = uuid4()
+    unrelated_task_id = uuid4()
+
+    initial = create_record(task_id=task_id)
+    repository.save(initial)
+
+    def write_entries():
+        for index in range(10):
+            repository.save(
+                create_record(
+                    task_id=task_id,
+                    key=f"new_{index}",
+                )
+            )
+
+    def read_entries():
+        for _ in range(10):
+            results = repository.search(task_id=task_id, limit=100)
+            assert all(record.task_id == task_id for record in results)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(write_entries),
+            executor.submit(read_entries),
+            executor.submit(read_entries),
+        ]
+
+        for future in futures:
+            future.result()
+
+    assert len(repository.search(task_id=task_id, limit=100)) == 11
+    assert repository.search(task_id=unrelated_task_id) == []
+
+def test_working_memory_persists_across_repository_instances(
+    repository,
+    tmp_path,
+):
+    record = create_record()
+    repository.save(record)
+
+    new_database = SQLiteDatabase(tmp_path / "working_memory.db")
+    new_repository = WorkingMemoryRepository(new_database)
+    new_repository.initialize()
+
+    retrieved = new_repository.get(
+        record.entry_id,
+        record.task_id,
+    )
+
+    assert retrieved is not None
+    assert retrieved.entry_id == record.entry_id
+    assert retrieved.content == record.content
+    assert retrieved.source_agent == record.source_agent
