@@ -2,7 +2,7 @@
 import logging
 import sqlite3
 from uuid import UUID
-
+from app.memory.meta_manager import MetaMemoryManager
 from app.agents.registry import AgentRegistry
 from app.core.agent_auth import AgentAuthenticator
 from app.core.communication_audit import CommunicationAudit
@@ -36,7 +36,7 @@ from app.memory.working_context_builder import (
     WorkingMemoryContextBuilder,
 )
 from app.memory.working_manager import WorkingMemoryManager
-
+from app.memory.meta_schemas import MetaMemoryType
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +52,7 @@ class Coordinator:
         procedural_memory_manager: ProceduralMemoryManager | None = None,
         working_memory_manager: WorkingMemoryManager | None = None,
         prospective_memory_manager: ProspectiveMemoryManager | None = None,
+        meta_memory_manager: MetaMemoryManager | None = None,
     ):
         self.registry = registry
         self.authenticator = authenticator
@@ -63,7 +64,7 @@ class Coordinator:
         self.procedural_memory_manager = procedural_memory_manager
         self.working_memory_manager = working_memory_manager
         self.prospective_memory_manager = prospective_memory_manager
-
+        self.meta_memory_manager = meta_memory_manager
         self.memory_context_builder = (
             MemoryContextBuilder(memory_manager)
             if memory_manager is not None
@@ -266,7 +267,7 @@ class Coordinator:
             )
 
             self._send_request(request)
-
+            self._record_context_usage(request)
             response = agent.process(request)
 
             self._validate_agent_response(
@@ -582,7 +583,7 @@ class Coordinator:
         )
 
         self._send_request(verification_request)
-
+        self._record_context_usage(verification_request)
         verification_response = verification_agent.process(
             verification_request
         )
@@ -730,3 +731,39 @@ class Coordinator:
                 "Task memory could not be persisted for task %s.",
                 task.task_id,
             )
+    def _record_context_usage(self, request: AgentMessage) -> None:
+        """Records best-effort usage for memories delivered to an agent."""
+
+        if self.meta_memory_manager is None:
+            return
+
+        contexts = (
+            (MetaMemoryType.EPISODIC, request.memory_context, "memories", "source_task_id"),
+            (MetaMemoryType.SEMANTIC, request.semantic_context, "memories", "memory_id"),
+            (MetaMemoryType.PROCEDURAL, request.procedural_context, "memories", "procedure_id"),
+            (MetaMemoryType.WORKING, request.working_memory_context, "entries", "entry_id"),
+            (MetaMemoryType.PROSPECTIVE, request.prospective_context, "memories", "memory_id"),
+        )
+
+        for memory_type, context, collection_name, id_field in contexts:
+            if context is None:
+                continue
+
+            for item in getattr(context, collection_name, []):
+                memory_id = "<unknown>"
+
+                try:
+                    memory_id = str(getattr(item, id_field))
+
+                    self.meta_memory_manager.record_usage(
+                        memory_type,
+                        memory_id,
+                        requesting_agent=request.recipient,
+                    )
+
+                except Exception:
+                    logger.exception(
+                        "Meta-memory usage tracking failed for %s memory %s.",
+                        memory_type.value,
+                        memory_id,
+                    )

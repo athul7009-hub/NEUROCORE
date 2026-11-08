@@ -5,7 +5,9 @@ import sqlite3
 import pytest
 from datetime import datetime, timezone
 from uuid import uuid4
+from types import SimpleNamespace
 
+from app.memory.meta_schemas import MetaMemoryType
 from app.memory.schemas import EpisodicMemoryRecord
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
@@ -39,7 +41,11 @@ def create_authenticator():
     })
 
 
-def create_coordinator(registry, memory_manager):
+def create_coordinator(
+    registry,
+    memory_manager,
+    meta_memory_manager=None,
+):
     if "VerificationAgent" not in registry.list_agents():
         registry.register(VerificationAgent())
 
@@ -47,6 +53,7 @@ def create_coordinator(registry, memory_manager):
         registry,
         create_authenticator(),
         memory_manager,
+        meta_memory_manager=meta_memory_manager,
     )
 
 
@@ -396,3 +403,275 @@ def test_memory_authorization_failure_prevents_agent_execution():
     assert response.message_type == MessageType.ERROR
     assert "Unauthorized memory retrieval" in response.payload["error"]
     process_spy.assert_not_called()
+def test_coordinator_accepts_meta_memory_manager(memory_manager):
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_memory_manager = Mock()
+
+    coordinator = create_coordinator(
+        registry,
+        memory_manager,
+        meta_memory_manager=meta_memory_manager,
+    )
+
+    assert coordinator.meta_memory_manager is meta_memory_manager
+
+
+def test_coordinator_supports_missing_meta_memory_manager(
+    memory_manager,
+):
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    coordinator = create_coordinator(
+        registry,
+        memory_manager,
+    )
+
+    assert coordinator.meta_memory_manager is None
+def test_context_usage_tracks_all_five_memory_types():
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_manager = Mock()
+    coordinator = create_coordinator(
+        registry,
+        Mock(),
+        meta_memory_manager=meta_manager,
+    )
+    request = SimpleNamespace(
+        recipient="PlanningAgent",
+        memory_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(source_task_id=uuid4()),
+            ],
+        ),
+        semantic_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(memory_id=uuid4()),
+            ],
+        ),
+        procedural_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(procedure_id=uuid4()),
+            ],
+        ),
+        working_memory_context=SimpleNamespace(
+            entries=[
+                SimpleNamespace(entry_id=uuid4()),
+            ],
+        ),
+        prospective_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(memory_id=uuid4()),
+            ],
+        ),
+    )
+
+    coordinator._record_context_usage(request)
+
+    assert meta_manager.record_usage.call_count == 5
+
+    expected_types = {
+        MetaMemoryType.EPISODIC,
+        MetaMemoryType.SEMANTIC,
+        MetaMemoryType.PROCEDURAL,
+        MetaMemoryType.WORKING,
+        MetaMemoryType.PROSPECTIVE,
+    }
+
+    actual_types = {
+        call.args[0]
+        for call in meta_manager.record_usage.call_args_list
+    }
+
+    assert actual_types == expected_types
+
+    for call in meta_manager.record_usage.call_args_list:
+        assert call.kwargs["requesting_agent"] == "PlanningAgent"
+
+
+def test_context_usage_ignores_empty_contexts():
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_manager = Mock()
+    coordinator = create_coordinator(
+        registry,
+        Mock(),
+        meta_memory_manager=meta_manager,
+    )
+
+    request = SimpleNamespace(
+        recipient="PlanningAgent",
+        memory_context=None,
+        semantic_context=None,
+        procedural_context=None,
+        working_memory_context=None,
+        prospective_context=None,
+    )
+
+    coordinator._record_context_usage(request)
+
+    meta_manager.record_usage.assert_not_called()
+
+
+def test_context_usage_does_not_create_missing_metadata():
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_manager = Mock()
+    meta_manager.record_usage.return_value = False
+
+    coordinator = create_coordinator(
+        registry,
+        Mock(),
+        meta_memory_manager=meta_manager,
+    )
+
+    request = SimpleNamespace(
+        recipient="PlanningAgent",
+        memory_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(source_task_id=uuid4()),
+            ],
+        ),
+        semantic_context=None,
+        procedural_context=None,
+        working_memory_context=None,
+        prospective_context=None,
+    )
+
+    coordinator._record_context_usage(request)
+
+    meta_manager.record_usage.assert_called_once()
+    meta_manager.remember.assert_not_called()
+
+
+def test_context_usage_failure_does_not_raise():
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_manager = Mock()
+    meta_manager.record_usage.side_effect = OSError(
+        "Metadata database unavailable."
+    )
+
+    coordinator = create_coordinator(
+        registry,
+        Mock(),
+        meta_memory_manager=meta_manager,
+    )
+
+    request = SimpleNamespace(
+        recipient="PlanningAgent",
+        memory_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(source_task_id=uuid4()),
+            ],
+        ),
+        semantic_context=None,
+        procedural_context=None,
+        working_memory_context=None,
+        prospective_context=None,
+    )
+
+    coordinator._record_context_usage(request)
+
+
+def test_context_usage_tracks_multiple_selected_memories():
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_manager = Mock()
+    coordinator = create_coordinator(
+        registry,
+        Mock(),
+        meta_memory_manager=meta_manager,
+    )
+
+    memory_ids = [uuid4(), uuid4(), uuid4()]
+
+    request = SimpleNamespace(
+        recipient="PlanningAgent",
+        memory_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(source_task_id=memory_id)
+                for memory_id in memory_ids
+            ],
+        ),
+        semantic_context=None,
+        procedural_context=None,
+        working_memory_context=None,
+        prospective_context=None,
+    )
+
+    coordinator._record_context_usage(request)
+
+    assert meta_manager.record_usage.call_count == 3
+
+    recorded_ids = [
+        call.args[1]
+        for call in meta_manager.record_usage.call_args_list
+    ]
+
+    assert recorded_ids == [str(memory_id) for memory_id in memory_ids]
+def test_usage_tracking_runs_for_planning_agent(memory_manager):
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_manager = Mock()
+    coordinator = create_coordinator(
+        registry,
+        memory_manager,
+        meta_memory_manager=meta_manager,
+    )
+
+    with patch.object(
+        coordinator,
+        "_record_context_usage",
+        wraps=coordinator._record_context_usage,
+    ) as usage_spy:
+        task = TaskRequest(
+            user_input="Create a project plan",
+            intent=TaskIntent.PLAN_TASK,
+        )
+
+        response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.RESULT
+
+    assert any(
+        call.args[0].recipient == "PlanningAgent"
+        for call in usage_spy.call_args_list
+    )
+def test_usage_tracking_runs_for_verification_agent(memory_manager):
+    registry = AgentRegistry()
+    registry.register(PlanningAgent())
+
+    meta_manager = Mock()
+    coordinator = create_coordinator(
+        registry,
+        memory_manager,
+        meta_memory_manager=meta_manager,
+    )
+
+    with patch.object(
+        coordinator,
+        "_record_context_usage",
+        wraps=coordinator._record_context_usage,
+    ) as usage_spy:
+        task = TaskRequest(
+            user_input="Create a project plan",
+            intent=TaskIntent.PLAN_TASK,
+        )
+
+        response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.RESULT
+
+    assert any(
+        call.args[0].recipient == "VerificationAgent"
+        for call in usage_spy.call_args_list
+    )

@@ -5,13 +5,16 @@ from app.agents.planning_agent import PlanningAgent
 from app.agents.verification_agent import VerificationAgent
 from datetime import datetime, timezone
 from uuid import uuid4
-
+from app.memory.meta_schemas import (
+    MetaMemoryRecord,
+    MetaMemoryType,
+)
 from app.core.config import settings
 from app.memory.schemas import (
     EpisodicMemoryRecord,
     MemoryStatus,
 )
-
+from uuid import uuid4
 def test_create_coordinator_initializes_application():
     coordinator = create_coordinator()
 
@@ -151,3 +154,65 @@ def test_coordinator_rejects_corrupted_database(tmp_path, monkeypatch):
         create_coordinator()
 
     assert database_path.read_bytes() == corrupted_content
+
+def test_create_coordinator_initializes_meta_memory():
+    coordinator = create_coordinator()
+
+    assert coordinator.meta_memory_manager is not None
+
+    memory_id = f"bootstrap-test-{uuid4()}"
+
+    record = MetaMemoryRecord(
+        memory_type=MetaMemoryType.EPISODIC,
+        memory_id=memory_id,
+    )
+
+    coordinator.meta_memory_manager.remember(
+        record,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    retrieved = coordinator.meta_memory_manager.get_for_memory(
+        MetaMemoryType.EPISODIC,
+        memory_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert retrieved == record
+
+def test_meta_memory_persists_after_coordinator_restart(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "meta_memory.db"
+
+    monkeypatch.setattr(
+        settings,
+        "database_path",
+        database_path,
+    )
+
+    first_coordinator = create_coordinator()
+
+    record = MetaMemoryRecord(
+        memory_type=MetaMemoryType.SEMANTIC,
+        memory_id="semantic-memory-001",
+        quality_score=0.9,
+        assessment_confidence=0.85,
+        last_assessed_at=datetime.now(timezone.utc),
+    )
+
+    first_coordinator.meta_memory_manager.remember(
+        record,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    second_coordinator = create_coordinator()
+
+    retrieved = second_coordinator.meta_memory_manager.get_for_memory(
+        MetaMemoryType.SEMANTIC,
+        "semantic-memory-001",
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert retrieved == record

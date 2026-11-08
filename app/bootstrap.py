@@ -6,7 +6,8 @@ from app.agents.file_analysis_agent import FileAnalysisAgent
 from app.agents.planning_agent import PlanningAgent
 from app.agents.registry import AgentRegistry
 from app.agents.verification_agent import VerificationAgent
-
+from app.memory.repositories.meta_memory import MetaMemoryRepository
+from app.memory.meta_manager import MetaMemoryManager
 from app.core.agent_auth import AgentAuthenticator
 from app.core.config import settings
 
@@ -87,7 +88,10 @@ def create_coordinator() -> Coordinator:
         prospective_repository
     )
     prospective_memory_manager.initialize()
-
+     # Meta-memory.
+    meta_repository = MetaMemoryRepository(database)
+    meta_memory_manager = MetaMemoryManager(meta_repository)
+    meta_memory_manager.initialize()
     # Register specialized agents.
     registry = AgentRegistry()
     registry.register(FileAnalysisAgent())
@@ -115,4 +119,5 @@ def create_coordinator() -> Coordinator:
         procedural_memory_manager=procedural_memory_manager,
         working_memory_manager=working_memory_manager,
         prospective_memory_manager=prospective_memory_manager,
+        meta_memory_manager=meta_memory_manager,
     )
