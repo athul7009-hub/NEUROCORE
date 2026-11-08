@@ -63,10 +63,11 @@ class VerificationAgent(BaseAgent):
             if not planning_result.signature:
                 errors.append("Planning response authentication is missing.")
 
-            # Validate the structured plan only when its envelope is valid.
             if not errors:
                 try:
-                    plan = TaskPlan.model_validate(planning_result.payload)
+                    plan = TaskPlan.model_validate(
+                        planning_result.payload
+                    )
                 except (ValueError, TypeError):
                     errors.append("Invalid task plan.")
 
@@ -113,6 +114,44 @@ class VerificationAgent(BaseAgent):
             else:
                 metadata["semantic_memory_context"] = {
                     "selected_count": len(semantic_context.memories),
+                }
+
+        # Validate optional procedural memory context.
+        procedural_context = message.procedural_context
+
+        if procedural_context is not None:
+            if procedural_context.task_id != message.task_id:
+                errors.append(
+                    "Procedural memory context task ID mismatch."
+                )
+
+            elif procedural_context.recipient_agent != self.name:
+                errors.append(
+                    "Procedural memory context recipient mismatch."
+                )
+
+            else:
+                metadata["procedural_memory_context"] = {
+                    "selected_count": len(procedural_context.memories),
+                }
+
+        # Validate optional task-scoped working memory context.
+        working_context = message.working_memory_context
+
+        if working_context is not None:
+            if working_context.task_id != message.task_id:
+                errors.append(
+                    "Working memory context task ID mismatch."
+                )
+
+            elif working_context.recipient_agent != self.name:
+                errors.append(
+                    "Working memory context recipient mismatch."
+                )
+
+            else:
+                metadata["working_memory_context"] = {
+                    "selected_count": len(working_context.entries),
                 }
 
         report = {

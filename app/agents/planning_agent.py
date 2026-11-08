@@ -25,7 +25,6 @@ class PlanningAgent(BaseAgent):
                 raise ValueError("A valid task objective is required.")
 
             objective = objective.strip()
-
             metadata = {}
 
             steps = [
@@ -146,7 +145,6 @@ class PlanningAgent(BaseAgent):
                                 f"{procedure_step.instruction}"
                             )
 
-                    # Keep the generated plan bounded.
                     steps[0:0] = procedure_steps[:10]
 
                 metadata["procedural_memory_influence"] = {
@@ -155,6 +153,32 @@ class PlanningAgent(BaseAgent):
                         procedure.name
                         for procedure in selected_procedures
                     ],
+                }
+
+            # Validate task-scoped working memory context.
+            working_context = message.working_memory_context
+
+            if working_context is not None:
+                if working_context.task_id != message.task_id:
+                    raise ValueError(
+                        "Working memory context task ID mismatch."
+                    )
+
+                if working_context.recipient_agent != self.name:
+                    raise ValueError(
+                        "Working memory context recipient mismatch."
+                    )
+
+                working_entry_count = len(working_context.entries)
+
+                if working_entry_count:
+                    steps.insert(
+                        0,
+                        "Review relevant current-task observations and intermediate results before finalizing the plan.",
+                    )
+
+                metadata["working_memory_influence"] = {
+                    "selected_count": working_entry_count,
                 }
 
             plan = TaskPlan(

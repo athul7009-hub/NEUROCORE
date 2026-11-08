@@ -1,6 +1,9 @@
 
 import sqlite3
-
+from app.memory.repositories.working_memory import (
+    WorkingMemoryRepository,
+)
+from app.memory.working_manager import WorkingMemoryManager
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
 from app.agents.planning_agent import PlanningAgent
@@ -62,6 +65,12 @@ def create_coordinator() -> Coordinator:
     )
     procedural_memory_manager.initialize()
 
+    # Working memory.
+    working_repository = WorkingMemoryRepository(database)
+    working_memory_manager = WorkingMemoryManager(
+        working_repository
+    )
+    working_memory_manager.initialize()
     # Register specialized agents.
     registry = AgentRegistry()
     registry.register(FileAnalysisAgent())
@@ -87,4 +96,5 @@ def create_coordinator() -> Coordinator:
         memory_manager=memory_manager,
         semantic_memory_manager=semantic_memory_manager,
         procedural_memory_manager=procedural_memory_manager,
+        working_memory_manager=working_memory_manager,
     )
