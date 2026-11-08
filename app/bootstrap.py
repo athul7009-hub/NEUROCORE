@@ -99,18 +99,16 @@ def create_coordinator() -> Coordinator:
     registry.register(VerificationAgent())
 
     # Configure agent authentication.
-    authenticator = AgentAuthenticator({
-        "FileAnalysisAgent": (
-            settings.file_analysis_agent_key.get_secret_value()
-        ),
-        "PlanningAgent": (
-            settings.planning_agent_key.get_secret_value()
-        ),
-        "VerificationAgent": (
-            settings.verification_agent_key.get_secret_value()
-        ),
-    })
-
+    authenticator = AgentAuthenticator(
+        {
+            "Coordinator": settings.coordinator_agent_key.get_secret_value(),
+            "FileAnalysisAgent": settings.file_analysis_agent_key.get_secret_value(),
+            "PlanningAgent": settings.planning_agent_key.get_secret_value(),
+            "VerificationAgent": settings.verification_agent_key.get_secret_value(),
+        }
+    )
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
     return Coordinator(
         registry=registry,
         authenticator=authenticator,

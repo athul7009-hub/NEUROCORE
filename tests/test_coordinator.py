@@ -1,9 +1,8 @@
 
 import json
-import sqlite3
 from unittest.mock import patch
 from uuid import uuid4
-
+import sqlite3
 import pytest
 
 from app.agents.base_agent import BaseAgent
@@ -20,15 +19,11 @@ from app.core.schemas import (
     TaskIntent,
     TaskRequest,
 )
-from app.memory.database import SQLiteDatabase
-from app.memory.manager import MemoryManager
-from app.memory.repositories.episodic_memory import (
-    EpisodicMemoryRepository,
-)
 
 
 def create_test_authenticator():
     return AgentAuthenticator({
+        "Coordinator": "d" * 64,
         "FileAnalysisAgent": "a" * 64,
         "PlanningAgent": "b" * 64,
         "VerificationAgent": "c" * 64,
@@ -39,7 +34,12 @@ def create_coordinator(registry):
     if "VerificationAgent" not in registry.list_agents():
         registry.register(VerificationAgent())
 
-    return Coordinator(registry, create_test_authenticator())
+    authenticator = create_test_authenticator()
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
+
+    return Coordinator(registry, authenticator)
 
 
 class MaliciousTestAgent(BaseAgent):
@@ -188,7 +188,7 @@ def test_coordinator_routes_planning_task():
 @pytest.mark.parametrize(
     ("overrides", "expected_error"),
     [
-        ({"sender": "FileAnalysisAgent"}, "identity mismatch"),
+        ({"sender": "FileAnalysisAgent"}, "does not match the sender"),
         ({"task_id": uuid4()}, "task id mismatch"),
         ({"recipient": "User"}, "recipient"),
         ({"in_reply_to": uuid4()}, "correlation mismatch"),
@@ -343,6 +343,12 @@ def test_coordinator_rejects_memory_authorization_failure(tmp_path):
     agent = PlanningAgent()
     registry.register(agent)
 
+    from app.memory.database import SQLiteDatabase
+    from app.memory.manager import MemoryManager
+    from app.memory.repositories.episodic_memory import (
+        EpisodicMemoryRepository,
+    )
+
     database = SQLiteDatabase(tmp_path / "memory.db")
     repository = EpisodicMemoryRepository(database)
     memory_manager = MemoryManager(repository)
@@ -353,6 +359,11 @@ def test_coordinator_rejects_memory_authorization_failure(tmp_path):
         create_test_authenticator(),
         memory_manager,
     )
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(
+            coordinator.authenticator
+        )
 
     task = TaskRequest(
         user_input="Create a plan to analyze my project",
@@ -384,6 +395,12 @@ def test_coordinator_continues_when_memory_database_is_unavailable(tmp_path):
     registry.register(agent)
     registry.register(VerificationAgent())
 
+    from app.memory.database import SQLiteDatabase
+    from app.memory.manager import MemoryManager
+    from app.memory.repositories.episodic_memory import (
+        EpisodicMemoryRepository,
+    )
+
     database = SQLiteDatabase(tmp_path / "memory.db")
     repository = EpisodicMemoryRepository(database)
     memory_manager = MemoryManager(repository)
@@ -394,6 +411,11 @@ def test_coordinator_continues_when_memory_database_is_unavailable(tmp_path):
         create_test_authenticator(),
         memory_manager,
     )
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(
+            coordinator.authenticator
+        )
 
     task = TaskRequest(
         user_input="Create a plan to analyze my project",
@@ -425,6 +447,12 @@ def test_coordinator_returns_success_when_memory_persistence_fails(tmp_path):
     registry.register(agent)
     registry.register(VerificationAgent())
 
+    from app.memory.database import SQLiteDatabase
+    from app.memory.manager import MemoryManager
+    from app.memory.repositories.episodic_memory import (
+        EpisodicMemoryRepository,
+    )
+
     database = SQLiteDatabase(tmp_path / "memory.db")
     repository = EpisodicMemoryRepository(database)
     memory_manager = MemoryManager(repository)
@@ -435,6 +463,11 @@ def test_coordinator_returns_success_when_memory_persistence_fails(tmp_path):
         create_test_authenticator(),
         memory_manager,
     )
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(
+            coordinator.authenticator
+        )
 
     task = TaskRequest(
         user_input="Create a plan to analyze my project",
@@ -454,6 +487,8 @@ def test_coordinator_returns_success_when_memory_persistence_fails(tmp_path):
     assert len(response.payload["steps"]) == 5
 
     remember_mock.assert_called_once()
+
+
 def test_coordinator_handles_unexpected_planning_agent_exception():
     registry = AgentRegistry()
     agent = PlanningAgent()
@@ -477,6 +512,7 @@ def test_coordinator_handles_unexpected_planning_agent_exception():
     assert response.message_type == MessageType.ERROR
     assert response.signature is None
     assert "internal" in response.payload["error"].lower()
+
 
 def test_coordinator_handles_unexpected_verification_agent_exception():
     registry = AgentRegistry()

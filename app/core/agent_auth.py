@@ -14,11 +14,28 @@ class AgentAuthenticator:
         agent_keys: dict[str, str],
         max_age_seconds: int = 300,
     ):
-        self._keys = {
-            name: bytes.fromhex(key)
-            for name, key in agent_keys.items()
-            if key
-        }
+        self._keys = {}
+
+        for name, key in agent_keys.items():
+            if not name.strip():
+                raise ValueError("Agent identity cannot be empty.")
+
+            if not key:
+                raise ValueError(f"Authentication key for '{name}' is missing.")
+
+            try:
+                decoded_key = bytes.fromhex(key)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Authentication key for '{name}' must be valid hexadecimal."
+                ) from exc
+
+            if len(decoded_key) < 32:
+                raise ValueError(
+                    f"Authentication key for '{name}' must contain at least 32 bytes."
+                )
+
+            self._keys[name] = decoded_key
 
         if not self._keys:
             raise ValueError("At least one agent key is required.")

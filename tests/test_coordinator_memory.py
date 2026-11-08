@@ -1,27 +1,27 @@
-
-from unittest.mock import Mock, patch
-import sqlite3
-
 import pytest
 from datetime import datetime, timezone
-from uuid import uuid4
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from uuid import uuid4
+import sqlite3
 
-from app.memory.meta_schemas import MetaMemoryType
-from app.memory.schemas import EpisodicMemoryRecord
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
 from app.agents.planning_agent import PlanningAgent
 from app.agents.registry import AgentRegistry
 from app.agents.verification_agent import VerificationAgent
-from app.core.schemas import TaskIntent, TaskRequest, MessageType
 from app.core.agent_auth import AgentAuthenticator
+from app.core.schemas import TaskIntent, TaskRequest, MessageType
 from app.memory.database import SQLiteDatabase
 from app.memory.manager import MemoryManager
+from app.memory.meta_schemas import MetaMemoryType
 from app.memory.repositories.episodic_memory import (
     EpisodicMemoryRepository,
 )
-from app.memory.schemas import MemoryStatus
+from app.memory.schemas import (
+    EpisodicMemoryRecord,
+    MemoryStatus,
+)
 
 
 @pytest.fixture
@@ -35,6 +35,7 @@ def memory_manager(tmp_path):
 
 def create_authenticator():
     return AgentAuthenticator({
+        "Coordinator": "d" * 64,
         "FileAnalysisAgent": "a" * 64,
         "PlanningAgent": "b" * 64,
         "VerificationAgent": "c" * 64,
@@ -49,9 +50,14 @@ def create_coordinator(
     if "VerificationAgent" not in registry.list_agents():
         registry.register(VerificationAgent())
 
+    authenticator = create_authenticator()
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
+
     return Coordinator(
         registry,
-        create_authenticator(),
+        authenticator,
         memory_manager,
         meta_memory_manager=meta_memory_manager,
     )
@@ -90,7 +96,7 @@ def test_successful_file_analysis_is_remembered(memory_manager):
         task.task_id,
         requesting_agent="CoordinatorAgent",
     )
-    print("COORDINATOR ERROR:", response.payload)
+
     assert response.message_type == MessageType.RESULT
     assert memory is not None
     assert memory.status == MemoryStatus.COMPLETED
@@ -176,7 +182,6 @@ def test_invalid_planning_response_is_remembered_as_failed(
     )
 
     assert response.message_type == MessageType.ERROR
-
     assert memory is not None
     assert memory.status == MemoryStatus.FAILED
     assert memory.agent_name == "PlanningAgent"
@@ -227,12 +232,12 @@ def test_memory_retrieval_failure_does_not_break_agent_response():
     assert failing_manager.get_recent_tasks.call_count == 2
     failing_manager.remember_task.assert_called_once()
 
+
 def test_relevant_historical_memory_influences_new_plan(memory_manager):
     registry = AgentRegistry()
     registry.register(PlanningAgent())
     coordinator = create_coordinator(registry, memory_manager)
 
-    # Store a previous successful planning task.
     historical_memory = EpisodicMemoryRecord(
         task_id=uuid4(),
         intent="plan_task",
@@ -247,7 +252,6 @@ def test_relevant_historical_memory_influences_new_plan(memory_manager):
 
     memory_manager.remember_task(historical_memory)
 
-    # Submit a similar task.
     task = TaskRequest(
         user_input="Create a project analysis plan",
         intent=TaskIntent.PLAN_TASK,
@@ -256,8 +260,6 @@ def test_relevant_historical_memory_influences_new_plan(memory_manager):
     response = coordinator.handle_task(task)
 
     assert response.message_type == MessageType.RESULT
-
-    # Confirm the historical memory influenced the generated plan.
     assert len(response.payload["steps"]) == 6
 
     assert any(
@@ -265,14 +267,12 @@ def test_relevant_historical_memory_influences_new_plan(memory_manager):
         for step in response.payload["steps"]
     )
 
-    # Confirm memory influence is visible in response metadata.
     influence = response.metadata["memory_influence"]
 
     assert influence["selected_count"] == 1
     assert influence["completed_count"] == 1
     assert influence["failed_count"] == 0
 
-    # Confirm the new task was also persisted.
     new_memory = memory_manager.get_task(
         task.task_id,
         requesting_agent="CoordinatorAgent",
@@ -281,6 +281,7 @@ def test_relevant_historical_memory_influences_new_plan(memory_manager):
     assert new_memory is not None
     assert new_memory.status == MemoryStatus.COMPLETED
     assert "6 steps" in new_memory.summary
+
 
 def test_relevant_failed_memory_influences_new_plan(memory_manager):
     registry = AgentRegistry()
@@ -309,7 +310,6 @@ def test_relevant_failed_memory_influences_new_plan(memory_manager):
     response = coordinator.handle_task(task)
 
     assert response.message_type == MessageType.RESULT
-
     assert len(response.payload["steps"]) == 6
 
     assert any(
@@ -331,6 +331,7 @@ def test_relevant_failed_memory_influences_new_plan(memory_manager):
     assert new_memory is not None
     assert new_memory.status == MemoryStatus.COMPLETED
     assert "6 steps" in new_memory.summary
+
 
 def test_historical_memory_content_is_not_used_as_instruction(
     memory_manager,
@@ -368,14 +369,16 @@ def test_historical_memory_content_is_not_used_as_instruction(
 
     assert len(steps) == 6
     assert response.payload["requires_approval"] is True
-
     assert malicious_summary not in steps
+
     assert not any(
         "execute all actions automatically" in step.lower()
         for step in steps
     )
 
     assert response.metadata["memory_influence"]["selected_count"] == 1
+
+
 def test_memory_authorization_failure_prevents_agent_execution():
     registry = AgentRegistry()
     planning_agent = PlanningAgent()
@@ -403,6 +406,8 @@ def test_memory_authorization_failure_prevents_agent_execution():
     assert response.message_type == MessageType.ERROR
     assert "Unauthorized memory retrieval" in response.payload["error"]
     process_spy.assert_not_called()
+
+
 def test_coordinator_accepts_meta_memory_manager(memory_manager):
     registry = AgentRegistry()
     registry.register(PlanningAgent())
@@ -430,6 +435,8 @@ def test_coordinator_supports_missing_meta_memory_manager(
     )
 
     assert coordinator.meta_memory_manager is None
+
+
 def test_context_usage_tracks_all_five_memory_types():
     registry = AgentRegistry()
     registry.register(PlanningAgent())
@@ -440,32 +447,23 @@ def test_context_usage_tracks_all_five_memory_types():
         Mock(),
         meta_memory_manager=meta_manager,
     )
+
     request = SimpleNamespace(
         recipient="PlanningAgent",
         memory_context=SimpleNamespace(
-            memories=[
-                SimpleNamespace(source_task_id=uuid4()),
-            ],
+            memories=[SimpleNamespace(source_task_id=uuid4())],
         ),
         semantic_context=SimpleNamespace(
-            memories=[
-                SimpleNamespace(memory_id=uuid4()),
-            ],
+            memories=[SimpleNamespace(memory_id=uuid4())],
         ),
         procedural_context=SimpleNamespace(
-            memories=[
-                SimpleNamespace(procedure_id=uuid4()),
-            ],
+            memories=[SimpleNamespace(procedure_id=uuid4())],
         ),
         working_memory_context=SimpleNamespace(
-            entries=[
-                SimpleNamespace(entry_id=uuid4()),
-            ],
+            entries=[SimpleNamespace(entry_id=uuid4())],
         ),
         prospective_context=SimpleNamespace(
-            memories=[
-                SimpleNamespace(memory_id=uuid4()),
-            ],
+            memories=[SimpleNamespace(memory_id=uuid4())],
         ),
     )
 
@@ -533,9 +531,7 @@ def test_context_usage_does_not_create_missing_metadata():
     request = SimpleNamespace(
         recipient="PlanningAgent",
         memory_context=SimpleNamespace(
-            memories=[
-                SimpleNamespace(source_task_id=uuid4()),
-            ],
+            memories=[SimpleNamespace(source_task_id=uuid4())],
         ),
         semantic_context=None,
         procedural_context=None,
@@ -567,9 +563,7 @@ def test_context_usage_failure_does_not_raise():
     request = SimpleNamespace(
         recipient="PlanningAgent",
         memory_context=SimpleNamespace(
-            memories=[
-                SimpleNamespace(source_task_id=uuid4()),
-            ],
+            memories=[SimpleNamespace(source_task_id=uuid4())],
         ),
         semantic_context=None,
         procedural_context=None,
@@ -617,6 +611,8 @@ def test_context_usage_tracks_multiple_selected_memories():
     ]
 
     assert recorded_ids == [str(memory_id) for memory_id in memory_ids]
+
+
 def test_usage_tracking_runs_for_planning_agent(memory_manager):
     registry = AgentRegistry()
     registry.register(PlanningAgent())
@@ -646,6 +642,8 @@ def test_usage_tracking_runs_for_planning_agent(memory_manager):
         call.args[0].recipient == "PlanningAgent"
         for call in usage_spy.call_args_list
     )
+
+
 def test_usage_tracking_runs_for_verification_agent(memory_manager):
     registry = AgentRegistry()
     registry.register(PlanningAgent())

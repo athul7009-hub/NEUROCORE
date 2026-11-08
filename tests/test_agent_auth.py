@@ -96,3 +96,35 @@ def test_wrong_signing_identity_is_rejected():
         assert False, "Expected identity mismatch."
     except ValueError:
         pass
+def test_empty_agent_key_is_rejected():
+    try:
+        AgentAuthenticator({"PlanningAgent": ""})
+        assert False, "Expected missing key rejection."
+    except ValueError as exc:
+        assert "missing" in str(exc).lower()
+
+
+def test_invalid_hex_key_is_rejected():
+    try:
+        AgentAuthenticator({"PlanningAgent": "not-a-valid-hex-key"})
+        assert False, "Expected invalid hexadecimal rejection."
+    except ValueError as exc:
+        assert "hexadecimal" in str(exc).lower()
+
+
+def test_short_key_is_rejected():
+    try:
+        AgentAuthenticator({"PlanningAgent": "aabb"})
+        assert False, "Expected short key rejection."
+    except ValueError as exc:
+        assert "32 bytes" in str(exc)
+
+
+def test_all_registered_agent_keys_are_loaded():
+    auth = create_authenticator()
+
+    assert set(auth._keys) == {
+        "PlanningAgent",
+        "FileAnalysisAgent",
+        "VerificationAgent",
+    }

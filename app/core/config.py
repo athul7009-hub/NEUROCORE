@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     Central configuration manager for NEUROCORE.
     """
     file_analysis_agent_key: SecretStr = SecretStr("")
+    coordinator_agent_key: SecretStr = SecretStr("")
     planning_agent_key: SecretStr = SecretStr("")
     verification_agent_key: SecretStr = SecretStr("")
     app_name: str = "NEUROCORE"

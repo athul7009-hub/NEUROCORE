@@ -2,7 +2,7 @@
 import logging
 import sqlite3
 from uuid import UUID
-from app.memory.meta_manager import MetaMemoryManager
+
 from app.agents.registry import AgentRegistry
 from app.core.agent_auth import AgentAuthenticator
 from app.core.communication_audit import CommunicationAudit
@@ -15,6 +15,8 @@ from app.core.schemas import (
 )
 from app.memory.context_builder import MemoryContextBuilder
 from app.memory.manager import MemoryManager
+from app.memory.meta_manager import MetaMemoryManager
+from app.memory.meta_schemas import MetaMemoryType
 from app.memory.procedural_context_builder import (
     ProceduralMemoryContextBuilder,
 )
@@ -28,15 +30,16 @@ from app.memory.schemas import (
     EpisodicMemoryRecord,
     MemoryStatus,
 )
-from app.memory.semantic_manager import SemanticMemoryManager
 from app.memory.semantic_context_builder import (
     SemanticMemoryContextBuilder,
 )
+from app.memory.semantic_manager import SemanticMemoryManager
 from app.memory.working_context_builder import (
     WorkingMemoryContextBuilder,
 )
 from app.memory.working_manager import WorkingMemoryManager
-from app.memory.meta_schemas import MetaMemoryType
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +59,7 @@ class Coordinator:
     ):
         self.registry = registry
         self.authenticator = authenticator
+
         self.communication_policy = CommunicationPolicy()
         self.communication_audit = CommunicationAudit()
 
@@ -65,6 +69,7 @@ class Coordinator:
         self.working_memory_manager = working_memory_manager
         self.prospective_memory_manager = prospective_memory_manager
         self.meta_memory_manager = meta_memory_manager
+
         self.memory_context_builder = (
             MemoryContextBuilder(memory_manager)
             if memory_manager is not None
@@ -266,9 +271,21 @@ class Coordinator:
                 prospective_context=prospective_context,
             )
 
-            self._send_request(request)
-            self._record_context_usage(request)
-            response = agent.process(request)
+            signed_request = self.authenticator.sign(
+                request,
+                expected_sender="Coordinator",
+            )
+
+            self._send_request(signed_request)
+            self._record_context_usage(signed_request)
+
+            response = agent.process_authenticated(signed_request)
+
+            # Authenticate before trusting response fields.
+            if not self.authenticator.verify(response):
+                raise PermissionError(
+                    "Agent response authentication failed."
+                )
 
             self._validate_agent_response(
                 response,
@@ -277,29 +294,19 @@ class Coordinator:
                 request.message_id,
             )
 
-            signed_response = self.authenticator.sign(
-                response,
-                expected_sender=agent_name,
-            )
-
-            if not self.authenticator.verify(signed_response):
-                raise ValueError(
-                    "Agent response authentication failed."
-                )
-
             if (
                 task.intent == TaskIntent.PLAN_TASK
-                and signed_response.message_type == MessageType.RESULT
+                and response.message_type == MessageType.RESULT
             ):
-                self._verify_plan(task, signed_response)
+                self._verify_plan(task, response)
 
             self._remember_task(
                 task,
                 agent_name,
-                signed_response,
+                response,
             )
 
-            return signed_response
+            return response
 
         except (ValueError, PermissionError) as error:
             failure = self._create_error_response(
@@ -308,7 +315,11 @@ class Coordinator:
             )
 
             if agent_name is not None:
-                self._remember_task(task, agent_name, failure)
+                self._remember_task(
+                    task,
+                    agent_name,
+                    failure,
+                )
 
             return failure
 
@@ -324,7 +335,11 @@ class Coordinator:
             )
 
             if agent_name is not None:
-                self._remember_task(task, agent_name, failure)
+                self._remember_task(
+                    task,
+                    agent_name,
+                    failure,
+                )
 
             return failure
 
@@ -334,12 +349,11 @@ class Coordinator:
         recipient_agent: str,
     ):
         """Builds authorized episodic memory context."""
+
         if (
             self.memory_context_builder is None
             or recipient_agent == "FileAnalysisAgent"
         ):
-            return None
-        if self.memory_context_builder is None:
             return None
 
         try:
@@ -432,12 +446,11 @@ class Coordinator:
         recipient_agent: str,
     ):
         """Builds isolated working memory context for the current task."""
+
         if (
             self.working_context_builder is None
             or task.intent != TaskIntent.PLAN_TASK
         ):
-            return None
-        if self.working_context_builder is None:
             return None
 
         try:
@@ -509,8 +522,8 @@ class Coordinator:
     def _validate_agent_response(
         response: AgentMessage,
         expected_sender: str,
-        expected_task_id,
-        expected_message_id,
+        expected_task_id: UUID,
+        expected_message_id: UUID,
     ) -> None:
         """Validates agent identity and response correlation."""
 
@@ -537,7 +550,7 @@ class Coordinator:
         task: TaskRequest,
         planning_response: AgentMessage,
     ) -> None:
-        """Requires independent verification before accepting a plan."""
+        """Requires independent authenticated verification before accepting a plan."""
 
         verification_agent_name = "VerificationAgent"
         verification_agent = self.registry.get(
@@ -582,11 +595,23 @@ class Coordinator:
             prospective_context=prospective_context,
         )
 
-        self._send_request(verification_request)
-        self._record_context_usage(verification_request)
-        verification_response = verification_agent.process(
-            verification_request
+        signed_request = self.authenticator.sign(
+            verification_request,
+            expected_sender="Coordinator",
         )
+
+        self._send_request(signed_request)
+        self._record_context_usage(signed_request)
+
+        verification_response = (
+            verification_agent.process_authenticated(signed_request)
+        )
+
+        # Authenticate before validating or trusting response fields.
+        if not self.authenticator.verify(verification_response):
+            raise PermissionError(
+                "Verification response authentication failed."
+            )
 
         self._validate_agent_response(
             verification_response,
@@ -595,22 +620,12 @@ class Coordinator:
             verification_request.message_id,
         )
 
-        signed_verification = self.authenticator.sign(
-            verification_response,
-            expected_sender=verification_agent_name,
-        )
-
-        if not self.authenticator.verify(signed_verification):
-            raise ValueError(
-                "Verification response authentication failed."
-            )
-
-        if signed_verification.message_type != MessageType.RESULT:
+        if verification_response.message_type != MessageType.RESULT:
             raise ValueError(
                 "VerificationAgent did not return a valid result."
             )
 
-        report = signed_verification.payload
+        report = verification_response.payload
 
         if not isinstance(report, dict):
             raise ValueError("Invalid verification report.")
@@ -731,6 +746,7 @@ class Coordinator:
                 "Task memory could not be persisted for task %s.",
                 task.task_id,
             )
+
     def _record_context_usage(self, request: AgentMessage) -> None:
         """Records best-effort usage for memories delivered to an agent."""
 
@@ -738,11 +754,36 @@ class Coordinator:
             return
 
         contexts = (
-            (MetaMemoryType.EPISODIC, request.memory_context, "memories", "source_task_id"),
-            (MetaMemoryType.SEMANTIC, request.semantic_context, "memories", "memory_id"),
-            (MetaMemoryType.PROCEDURAL, request.procedural_context, "memories", "procedure_id"),
-            (MetaMemoryType.WORKING, request.working_memory_context, "entries", "entry_id"),
-            (MetaMemoryType.PROSPECTIVE, request.prospective_context, "memories", "memory_id"),
+            (
+                MetaMemoryType.EPISODIC,
+                request.memory_context,
+                "memories",
+                "source_task_id",
+            ),
+            (
+                MetaMemoryType.SEMANTIC,
+                request.semantic_context,
+                "memories",
+                "memory_id",
+            ),
+            (
+                MetaMemoryType.PROCEDURAL,
+                request.procedural_context,
+                "memories",
+                "procedure_id",
+            ),
+            (
+                MetaMemoryType.WORKING,
+                request.working_memory_context,
+                "entries",
+                "entry_id",
+            ),
+            (
+                MetaMemoryType.PROSPECTIVE,
+                request.prospective_context,
+                "memories",
+                "memory_id",
+            ),
         )
 
         for memory_type, context, collection_name, id_field in contexts:

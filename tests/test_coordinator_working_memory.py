@@ -2,16 +2,14 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
-from app.core.schemas import AgentMessage, MessageType
+
+from app.core.schemas import AgentMessage, MessageType, TaskIntent, TaskRequest
 from app.agents.coordinator import Coordinator
 from app.agents.planning_agent import PlanningAgent
 from app.agents.registry import AgentRegistry
 from app.agents.verification_agent import VerificationAgent
-from app.core.schemas import TaskIntent, TaskRequest
 from app.memory.database import SQLiteDatabase
-from app.memory.repositories.working_memory import (
-    WorkingMemoryRepository,
-)
+from app.memory.repositories.working_memory import WorkingMemoryRepository
 from app.memory.working_manager import WorkingMemoryManager
 from app.memory.working_schemas import (
     WorkingMemoryEntryType,
@@ -46,15 +44,22 @@ def create_working_record(task_id, key, content):
 
 def create_test_coordinator(tmp_path, manager):
     registry = AgentRegistry()
+
     planning_agent = PlanningAgent()
     verification_agent = VerificationAgent()
 
     registry.register(planning_agent)
     registry.register(verification_agent)
 
+    # Use the same authenticator for the Coordinator and all agents.
+    authenticator = create_test_authenticator()
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
+
     coordinator = Coordinator(
         registry,
-        create_test_authenticator(),
+        authenticator,
         working_memory_manager=manager,
     )
 
@@ -236,6 +241,7 @@ def test_coordinator_rejects_working_memory_authorization_failure(
     assert "unauthorized" in response.payload["error"].lower()
 
     planning_mock.assert_not_called()
+
 
 def test_working_memory_content_is_not_promoted_to_episodic_memory(
     tmp_path,
