@@ -475,3 +475,97 @@ def test_complete_assessment_workflow(manager, record):
     assert stored.last_assessed_at is not None
     assert stored.usage_count == 5
     assert stored.memory_id == record.memory_id
+
+def test_assess_and_persist_saves_generated_assessment(manager, record):
+    manager.remember(record, requesting_agent="CoordinatorAgent")
+
+    assessed_at = datetime.now(timezone.utc)
+
+    assessment = manager.assess_and_persist(
+        record.meta_id,
+        requesting_agent="CoordinatorAgent",
+        now=assessed_at,
+    )
+
+    assert isinstance(assessment, MetaMemoryAssessment)
+    assert assessment.quality_score is None
+    assert assessment.assessment_confidence == 0.0
+
+    stored = manager.get(
+        record.meta_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert stored.quality_score == assessment.quality_score
+    assert stored.assessment_confidence == assessment.assessment_confidence
+    assert stored.staleness_status == assessment.staleness_status
+    assert stored.last_assessed_at == assessment.assessed_at
+
+
+def test_assess_and_persist_returns_none_for_missing_record(manager):
+    result = manager.assess_and_persist(
+        uuid4(),
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert result is None
+
+
+def test_only_coordinator_can_assess_and_persist(manager, record):
+    manager.remember(record, requesting_agent="CoordinatorAgent")
+
+    with pytest.raises(PermissionError):
+        manager.assess_and_persist(
+            record.meta_id,
+            requesting_agent="PlanningAgent",
+        )
+
+
+def test_assess_and_persist_rejects_invalid_metadata_id(manager):
+    with pytest.raises(TypeError):
+        manager.assess_and_persist(
+            "invalid-id",
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+def test_assess_and_persist_uses_generated_assessment_values(
+    manager,
+    record,
+):
+    manager.remember(record, requesting_agent="CoordinatorAgent")
+
+    expected = MetaMemoryAssessment(
+        quality_score=0.8,
+        assessment_confidence=0.6,
+        staleness_status=MetaMemoryStalenessStatus.CURRENT,
+        assessed_at=datetime(2026, 11, 8, tzinfo=timezone.utc),
+        rationale="Generated assessment",
+    )
+
+    class StubAssessmentEngine:
+        def assess(self, received_record, *, now=None):
+            assert received_record.meta_id == record.meta_id
+            return expected
+
+    custom_manager = MetaMemoryManager(
+        manager.repository,
+        assessment_engine=StubAssessmentEngine(),
+    )
+
+    result = custom_manager.assess_and_persist(
+        record.meta_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert result == expected
+
+    stored = custom_manager.get(
+        record.meta_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert stored.quality_score == 0.8
+    assert stored.assessment_confidence == 0.6
+    assert stored.staleness_status == MetaMemoryStalenessStatus.CURRENT
+    assert stored.last_assessed_at == expected.assessed_at

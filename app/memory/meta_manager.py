@@ -50,7 +50,9 @@ class MetaMemoryManager:
             raise PermissionError(
                 "Only the coordinator can manage meta-memory assessments."
             )
-
+    def authorize_maintenance(self, requesting_agent: str) -> None:
+        """Authorizes an agent to perform meta-memory maintenance."""
+        self._authorize_coordinator(requesting_agent)
     def remember(
         self,
         record: MetaMemoryRecord,
@@ -174,7 +176,42 @@ class MetaMemoryManager:
             record,
             now=now,
         )
+    def assess_and_persist(
+        self,
+        meta_id: UUID,
+        *,
+        requesting_agent: str,
+        now: datetime | None = None,
+    ) -> MetaMemoryAssessment | None:
+        """Assesses metadata and persists the generated assessment."""
 
+        self._authorize_coordinator(requesting_agent)
+
+        if not isinstance(meta_id, UUID):
+            raise TypeError("Meta-memory ID must be a UUID.")
+
+        record = self.repository.get(meta_id)
+
+        if record is None:
+            return None
+
+        assessment = self.assessment_engine.assess(
+            record,
+            now=now,
+        )
+
+        updated = self.repository.update_assessment(
+            meta_id,
+            quality_score=assessment.quality_score,
+            assessment_confidence=assessment.assessment_confidence,
+            staleness_status=assessment.staleness_status,
+            assessed_at=assessment.assessed_at,
+        )
+
+        if not updated:
+            return None
+
+        return assessment
    
     def update_assessment(
         self,

@@ -250,6 +250,7 @@ class MetaMemoryRepository:
 
         return cursor.rowcount > 0
 
+
     def update_assessment(
         self,
         meta_id: UUID,
@@ -291,7 +292,10 @@ class MetaMemoryRepository:
         if assessed_at.tzinfo is None or assessed_at.utcoffset() is None:
             raise ValueError("assessed_at must be timezone-aware")
 
-        if assessed_at.astimezone(timezone.utc) > datetime.now(timezone.utc):
+        assessed_timestamp = assessed_at.astimezone(timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        if assessed_timestamp > now:
             raise ValueError("assessed_at cannot be in the future")
 
         with self.database.connection() as connection:
@@ -310,8 +314,8 @@ class MetaMemoryRepository:
                     quality_score,
                     assessment_confidence,
                     staleness_status.value,
-                    self._timestamp(assessed_at),
-                    self._timestamp(assessed_at),
+                    assessed_timestamp.isoformat(),
+                    now.isoformat(),
                     str(meta_id),
                 ),
             )

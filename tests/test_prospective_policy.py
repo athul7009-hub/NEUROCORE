@@ -102,6 +102,7 @@ def test_retrieval_accepts_triggered_memory():
     record = create_record(
         trigger_type=ProspectiveTriggerType.TIME,
         due_at=now,
+        created_at=now,
         status=ProspectiveMemoryStatus.TRIGGERED,
         triggered_at=now,
     )
