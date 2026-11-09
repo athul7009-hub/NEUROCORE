@@ -1,5 +1,5 @@
 from uuid import UUID
-
+from datetime import datetime, timezone
 from app.memory.repositories.working_memory import (
     WorkingMemoryRepository,
 )
@@ -8,11 +8,14 @@ from app.memory.working_schemas import (
     WorkingMemoryEntryType,
     WorkingMemoryRecord,
 )
-
+from app.memory.identity_schemas import (
+    MemoryIdentityAssessment,
+    MemoryIdentityAvailability,
+)
 
 class WorkingMemoryManager:
     """Provides controlled access to task-scoped working memory."""
-
+    
     def __init__(
         self,
         repository: WorkingMemoryRepository,
@@ -20,10 +23,10 @@ class WorkingMemoryManager:
     ):
         self.repository = repository
         self.policy = policy or WorkingMemoryPolicy()
-
+    
     def initialize(self) -> None:
         self.repository.initialize()
-
+    
     def _authorize_requester(self, requesting_agent: str) -> None:
         if not self.policy.is_trusted(requesting_agent):
             raise PermissionError(
@@ -97,7 +100,48 @@ class WorkingMemoryManager:
             return None
 
         return record
+    def inspect_identity(
+        self,
+        entry_id: UUID,
+        task_id: UUID,
+        *,
+        requesting_agent: str,
+    ) -> MemoryIdentityAssessment:
+        """Inspects working memory identity without retrieving content."""
 
+        self._authorize_coordinator(requesting_agent)
+        self._validate_entry_id(entry_id)
+        self._validate_task_id(task_id)
+
+        expires_at = self.repository.get_identity_expiry(
+            entry_id,
+            task_id,
+        )
+
+        if expires_at is None:
+            return MemoryIdentityAssessment(
+                memory_type="working",
+                memory_id=entry_id,
+                task_id=task_id,
+                exists=False,
+                lifecycle_status=None,
+                availability=MemoryIdentityAvailability.NOT_FOUND,
+            )
+
+        is_expired = expires_at <= datetime.now(timezone.utc)
+
+        return MemoryIdentityAssessment(
+            memory_type="working",
+            memory_id=entry_id,
+            task_id=task_id,
+            exists=True,
+            lifecycle_status="expired" if is_expired else "active",
+            availability=(
+                MemoryIdentityAvailability.EXPIRED
+                if is_expired
+                else MemoryIdentityAvailability.AVAILABLE
+            ),
+        )
     def search(
         self,
         *,

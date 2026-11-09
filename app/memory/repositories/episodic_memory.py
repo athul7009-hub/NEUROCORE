@@ -165,6 +165,27 @@ class EpisodicMemoryRepository:
             ).fetchone()
 
         return self._to_record(row) if row else None
+    
+    def get_identity_status(
+        self,
+        task_id: UUID,
+    ) -> MemoryLifecycleStatus | None:
+        """Returns lifecycle status without retrieving memory content."""
+
+        with self.database.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT lifecycle_status
+                FROM episodic_memory
+                WHERE task_id = ?
+                """,
+                (str(task_id),),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return MemoryLifecycleStatus(row["lifecycle_status"])
 
     def get_recent(
         self,

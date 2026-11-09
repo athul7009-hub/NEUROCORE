@@ -47,7 +47,7 @@ class MetaMemoryRecord(BaseModel):
 
     memory_type: MetaMemoryType
     memory_id: str = Field(min_length=1, max_length=100)
-
+    task_id: UUID | None = None
     quality_score: float | None = Field(
         default=None,
         ge=0.0,
@@ -114,6 +114,15 @@ class MetaMemoryRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_meta_memory(self):
+        if self.memory_type == MetaMemoryType.WORKING:
+            if self.task_id is None:
+                raise ValueError(
+                    "task_id is required for working memory."
+                )
+        elif self.task_id is not None:
+            raise ValueError(
+                "task_id is only allowed for working memory."
+            )
         if self.updated_at < self.created_at:
             raise ValueError(
                 "updated_at cannot be earlier than created_at."

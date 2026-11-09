@@ -2,7 +2,11 @@
 import logging
 import sqlite3
 from uuid import UUID
-
+from app.memory.identity_resolver import MemoryIdentityResolver
+from app.memory.identity_schemas import (
+    MemoryIdentityAssessment,
+    MemoryIdentityRequest,
+)
 from app.agents.registry import AgentRegistry
 from app.core.agent_auth import AgentAuthenticator
 from app.core.communication_audit import CommunicationAudit
@@ -75,7 +79,25 @@ class Coordinator:
             if memory_manager is not None
             else None
         )
+        identity_managers = (
+            memory_manager,
+            semantic_memory_manager,
+            procedural_memory_manager,
+            working_memory_manager,
+            prospective_memory_manager,
+        )
 
+        self.memory_identity_resolver = (
+            MemoryIdentityResolver(
+                episodic_manager=memory_manager,
+                semantic_manager=semantic_memory_manager,
+                procedural_manager=procedural_memory_manager,
+                working_manager=working_memory_manager,
+                prospective_manager=prospective_memory_manager,
+            )
+            if all(manager is not None for manager in identity_managers)
+            else None
+        )
         self.semantic_context_builder = (
             SemanticMemoryContextBuilder(semantic_memory_manager)
             if semantic_memory_manager is not None
@@ -200,7 +222,22 @@ class Coordinator:
                 task_id,
             )
             raise
+    def inspect_memory_identity(
+        self,
+        request: MemoryIdentityRequest,
+    ) -> MemoryIdentityAssessment:
+        """Inspects memory identity through coordinator authorization."""
 
+        if self.memory_identity_resolver is None:
+            raise RuntimeError(
+                "All memory managers must be initialized "
+                "for identity inspection."
+            )
+
+        return self.memory_identity_resolver.inspect(
+            request,
+            requesting_agent="CoordinatorAgent",
+        )
     def handle_task(self, task: TaskRequest) -> AgentMessage:
         """Routes, executes, verifies, and records an agent task."""
 

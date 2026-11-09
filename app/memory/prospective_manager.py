@@ -14,7 +14,10 @@ from app.memory.repositories.prospective_memory import (
     ProspectiveMemoryRepository,
 )
 from app.memory.schemas import MemorySensitivity
-
+from app.memory.identity_schemas import (
+    MemoryIdentityAssessment,
+    MemoryIdentityAvailability,
+)
 
 class ProspectiveMemoryManager:
     """Provides controlled access to prospective memory."""
@@ -100,7 +103,44 @@ class ProspectiveMemoryManager:
             return None
 
         return record
+    def inspect_identity(
+        self,
+        memory_id: UUID,
+        *,
+        requesting_agent: str,
+    ) -> MemoryIdentityAssessment:
+        """Inspects prospective memory identity without retrieving content."""
 
+        self._authorize_coordinator(requesting_agent)
+        self._validate_memory_id(memory_id)
+
+        status = self.repository.get_identity_status(memory_id)
+
+        if status is None:
+            return MemoryIdentityAssessment(
+                memory_type="prospective",
+                memory_id=memory_id,
+                exists=False,
+                lifecycle_status=None,
+                availability=MemoryIdentityAvailability.NOT_FOUND,
+            )
+
+        availability = (
+            MemoryIdentityAvailability.AVAILABLE
+            if status in {
+                ProspectiveMemoryStatus.PENDING,
+                ProspectiveMemoryStatus.TRIGGERED,
+            }
+            else MemoryIdentityAvailability.INACTIVE
+        )
+
+        return MemoryIdentityAssessment(
+            memory_type="prospective",
+            memory_id=memory_id,
+            exists=True,
+            lifecycle_status=status.value,
+            availability=availability,
+        )
     def search(
         self,
         *,

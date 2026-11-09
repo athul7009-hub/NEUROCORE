@@ -118,7 +118,28 @@ class WorkingMemoryRepository:
             ).fetchone()
 
         return self._to_record(row) if row else None
+    def get_identity_expiry(
+        self,
+        entry_id: UUID,
+        task_id: UUID,
+    ) -> datetime | None:
+        """Returns entry expiry without retrieving memory content."""
 
+        with self.database.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT expires_at
+                FROM working_memory
+                WHERE entry_id = ?
+                  AND task_id = ?
+                """,
+                (str(entry_id), str(task_id)),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return datetime.fromisoformat(row["expires_at"])
     def search(
         self,
         *,

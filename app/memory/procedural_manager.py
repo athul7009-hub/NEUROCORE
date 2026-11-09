@@ -44,7 +44,20 @@ class ProceduralMemoryManager:
             raise PermissionError(
                 "Only the coordinator can manage procedural memories."
             )
+    def inspect_identity(
+        self,
+        procedure_id: UUID,
+        *,
+        requesting_agent: str,
+    ) -> ProceduralMemoryStatus | None:
+        """Inspects procedural memory identity without exposing its content."""
 
+        self._authorize_coordinator(requesting_agent)
+
+        if not isinstance(procedure_id, UUID):
+            raise TypeError("Procedure ID must be a UUID.")
+
+        return self.repository.get_identity_status(procedure_id)
     def remember(
         self,
         record: ProceduralMemoryRecord,

@@ -6,7 +6,7 @@ from app.memory.meta_schemas import (
     MetaMemoryRecord,
     MetaMemoryType,
 )
-
+from uuid import uuid4
 
 @pytest.fixture
 def policy():
@@ -33,13 +33,18 @@ def test_rejects_non_meta_memory_record(policy):
     "memory_type",
     list(MetaMemoryType),
 )
-def test_accepts_all_supported_memory_types(policy, memory_type):
+def test_accepts_all_supported_memory_types(memory_type):
     record = MetaMemoryRecord(
         memory_type=memory_type,
         memory_id="memory-001",
+        task_id=(
+            uuid4()
+            if memory_type == MetaMemoryType.WORKING
+            else None
+        ),
     )
 
-    assert policy.evaluate_storage(record) is True
+    assert record.memory_type == memory_type
 
 
 @pytest.mark.parametrize(

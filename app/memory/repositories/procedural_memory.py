@@ -119,7 +119,26 @@ class ProceduralMemoryRepository:
             ).fetchone()
 
         return self._to_record(row) if row else None
+    def get_identity_status(
+        self,
+        procedure_id: UUID,
+    ) -> ProceduralMemoryStatus | None:
+        """Returns procedural memory status without retrieving its content."""
 
+        with self.database.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT status
+                FROM procedural_memory
+                WHERE procedure_id = ?
+                """,
+                (str(procedure_id),),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return ProceduralMemoryStatus(row["status"])
     def search(
         self,
         *,

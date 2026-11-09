@@ -43,7 +43,20 @@ class SemanticMemoryManager:
             raise PermissionError(
                 "Only the coordinator can manage semantic memories."
             )
+    def inspect_identity(
+        self,
+        memory_id: UUID,
+        *,
+        requesting_agent: str,
+    ) -> SemanticMemoryStatus | None:
+        """Inspects semantic memory identity without exposing its content."""
 
+        self._authorize_coordinator(requesting_agent)
+
+        if not isinstance(memory_id, UUID):
+            raise TypeError("Memory ID must be a UUID.")
+
+        return self.repository.get_identity_status(memory_id)
     def remember(
         self,
         record: SemanticMemoryRecord,

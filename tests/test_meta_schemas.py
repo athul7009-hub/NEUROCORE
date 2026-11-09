@@ -38,10 +38,16 @@ def test_meta_id_is_generated(valid_meta_memory):
 
 def test_all_memory_types_are_supported():
     for memory_type in MetaMemoryType:
-        record = MetaMemoryRecord(
-            memory_type=memory_type,
-            memory_id=str(uuid4()),
-        )
+        data = {
+            "memory_type": memory_type,
+            "memory_id": str(uuid4()),
+        }
+
+        if memory_type == MetaMemoryType.WORKING:
+            data["task_id"] = uuid4()
+
+        record = MetaMemoryRecord(**data)
+
         assert record.memory_type == memory_type
 
 
@@ -216,3 +222,16 @@ def test_inconclusive_assessment_data_is_valid():
     assert record.quality_score is None
     assert record.assessment_confidence == 0.0
     assert record.last_assessed_at is not None
+def test_all_memory_types_are_supported():
+    for memory_type in MetaMemoryType:
+        data = {
+            "memory_type": memory_type,
+            "memory_id": str(uuid4()),
+        }
+
+        if memory_type == MetaMemoryType.WORKING:
+            data["task_id"] = uuid4()
+
+        record = MetaMemoryRecord(**data)
+
+        assert record.memory_type == memory_type

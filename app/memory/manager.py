@@ -52,6 +52,21 @@ class MemoryManager:
             raise PermissionError(
                 "Only the coordinator can manage memory lifecycle operations."
             )
+    
+    def inspect_identity(
+        self,
+        task_id: UUID,
+        *,
+        requesting_agent: str,
+    ) -> MemoryLifecycleStatus | None:
+        """Inspects episodic memory identity without exposing its content."""
+
+        self._authorize_coordinator(requesting_agent)
+
+        if not isinstance(task_id, UUID):
+            raise TypeError("Task ID must be a UUID.")
+
+        return self.repository.get_identity_status(task_id)
 
     def remember_task(
         self,

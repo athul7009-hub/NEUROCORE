@@ -135,7 +135,26 @@ class SemanticMemoryRepository:
             ).fetchone()
 
         return self._to_record(row) if row else None
+    def get_identity_status(
+        self,
+        memory_id: UUID,
+    ) -> SemanticMemoryStatus | None:
+        """Returns semantic memory status without retrieving its content."""
 
+        with self.database.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT status
+                FROM semantic_memory
+                WHERE memory_id = ?
+                """,
+                (str(memory_id),),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return SemanticMemoryStatus(row["status"])
     def search(
         self,
         *,
