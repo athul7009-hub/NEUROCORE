@@ -2,10 +2,10 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import uuid4
-
+from tests.fakes import create_planning_agent
 from app.core.schemas import AgentMessage, MessageType, TaskIntent, TaskRequest
 from app.agents.coordinator import Coordinator
-from app.agents.planning_agent import PlanningAgent
+
 from app.agents.registry import AgentRegistry
 from app.agents.verification_agent import VerificationAgent
 from app.memory.database import SQLiteDatabase
@@ -45,7 +45,7 @@ def create_working_record(task_id, key, content):
 def create_test_coordinator(tmp_path, manager):
     registry = AgentRegistry()
 
-    planning_agent = PlanningAgent()
+    planning_agent = create_planning_agent()
     verification_agent = VerificationAgent()
 
     registry.register(planning_agent)

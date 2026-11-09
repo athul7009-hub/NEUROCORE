@@ -4,10 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
 import sqlite3
-
+from tests.fakes import create_planning_agent
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
-from app.agents.planning_agent import PlanningAgent
+
 from app.agents.registry import AgentRegistry
 from app.agents.verification_agent import VerificationAgent
 from app.core.agent_auth import AgentAuthenticator
@@ -107,7 +107,7 @@ def test_successful_file_analysis_is_remembered(memory_manager):
 
 def test_successful_planning_task_is_remembered(memory_manager):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
     coordinator = create_coordinator(registry, memory_manager)
 
     task = TaskRequest(
@@ -189,7 +189,7 @@ def test_invalid_planning_response_is_remembered_as_failed(
 
 def test_memory_failure_does_not_change_agent_response():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     failing_manager = Mock()
     failing_manager.remember_task.side_effect = OSError(
@@ -212,7 +212,7 @@ def test_memory_failure_does_not_change_agent_response():
 
 def test_memory_retrieval_failure_does_not_break_agent_response():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     failing_manager = Mock()
     failing_manager.get_recent_tasks.side_effect = (
@@ -235,7 +235,7 @@ def test_memory_retrieval_failure_does_not_break_agent_response():
 
 def test_relevant_historical_memory_influences_new_plan(memory_manager):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
     coordinator = create_coordinator(registry, memory_manager)
 
     historical_memory = EpisodicMemoryRecord(
@@ -260,7 +260,7 @@ def test_relevant_historical_memory_influences_new_plan(memory_manager):
     response = coordinator.handle_task(task)
 
     assert response.message_type == MessageType.RESULT
-    assert len(response.payload["steps"]) == 6
+    assert len(response.payload["steps"]) == 5
 
     assert any(
         "previously completed tasks" in step
@@ -280,12 +280,12 @@ def test_relevant_historical_memory_influences_new_plan(memory_manager):
 
     assert new_memory is not None
     assert new_memory.status == MemoryStatus.COMPLETED
-    assert "6 steps" in new_memory.summary
+    assert "5 steps" in new_memory.summary
 
 
 def test_relevant_failed_memory_influences_new_plan(memory_manager):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
     coordinator = create_coordinator(registry, memory_manager)
 
     historical_memory = EpisodicMemoryRecord(
@@ -310,7 +310,7 @@ def test_relevant_failed_memory_influences_new_plan(memory_manager):
     response = coordinator.handle_task(task)
 
     assert response.message_type == MessageType.RESULT
-    assert len(response.payload["steps"]) == 6
+    assert len(response.payload["steps"]) == 5
 
     assert any(
         "preventive checks" in step
@@ -330,14 +330,14 @@ def test_relevant_failed_memory_influences_new_plan(memory_manager):
 
     assert new_memory is not None
     assert new_memory.status == MemoryStatus.COMPLETED
-    assert "6 steps" in new_memory.summary
+    assert "5 steps" in new_memory.summary
 
 
 def test_historical_memory_content_is_not_used_as_instruction(
     memory_manager,
 ):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
     coordinator = create_coordinator(registry, memory_manager)
 
     malicious_summary = (
@@ -367,7 +367,7 @@ def test_historical_memory_content_is_not_used_as_instruction(
 
     steps = response.payload["steps"]
 
-    assert len(steps) == 6
+    assert len(steps) == 5
     assert response.payload["requires_approval"] is True
     assert malicious_summary not in steps
 
@@ -381,7 +381,7 @@ def test_historical_memory_content_is_not_used_as_instruction(
 
 def test_memory_authorization_failure_prevents_agent_execution():
     registry = AgentRegistry()
-    planning_agent = PlanningAgent()
+    planning_agent = create_planning_agent()
     registry.register(planning_agent)
 
     failing_manager = Mock()
@@ -410,7 +410,7 @@ def test_memory_authorization_failure_prevents_agent_execution():
 
 def test_coordinator_accepts_meta_memory_manager(memory_manager):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_memory_manager = Mock()
 
@@ -427,7 +427,7 @@ def test_coordinator_supports_missing_meta_memory_manager(
     memory_manager,
 ):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     coordinator = create_coordinator(
         registry,
@@ -439,7 +439,7 @@ def test_coordinator_supports_missing_meta_memory_manager(
 
 def test_context_usage_tracks_all_five_memory_types():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_manager = Mock()
     coordinator = create_coordinator(
@@ -492,7 +492,7 @@ def test_context_usage_tracks_all_five_memory_types():
 
 def test_context_usage_ignores_empty_contexts():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_manager = Mock()
     coordinator = create_coordinator(
@@ -517,7 +517,7 @@ def test_context_usage_ignores_empty_contexts():
 
 def test_context_usage_does_not_create_missing_metadata():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_manager = Mock()
     meta_manager.record_usage.return_value = False
@@ -547,7 +547,7 @@ def test_context_usage_does_not_create_missing_metadata():
 
 def test_context_usage_failure_does_not_raise():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_manager = Mock()
     meta_manager.record_usage.side_effect = OSError(
@@ -576,7 +576,7 @@ def test_context_usage_failure_does_not_raise():
 
 def test_context_usage_tracks_multiple_selected_memories():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_manager = Mock()
     coordinator = create_coordinator(
@@ -615,7 +615,7 @@ def test_context_usage_tracks_multiple_selected_memories():
 
 def test_usage_tracking_runs_for_planning_agent(memory_manager):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_manager = Mock()
     coordinator = create_coordinator(
@@ -646,7 +646,7 @@ def test_usage_tracking_runs_for_planning_agent(memory_manager):
 
 def test_usage_tracking_runs_for_verification_agent(memory_manager):
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     meta_manager = Mock()
     coordinator = create_coordinator(

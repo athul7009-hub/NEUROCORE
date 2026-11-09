@@ -1,14 +1,42 @@
-from datetime import datetime, timedelta, timezone
 
-from app.memory.context_schemas import (
-    MemoryContext,
-    MemoryContextItem,
-)
-from app.memory.schemas import MemoryStatus
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.agents.planning_agent import PlanningAgent
 from app.core.schemas import AgentMessage, MessageType, TaskPlan
+from app.llm.schemas import ReasoningResponse
+from app.memory.context_schemas import MemoryContext, MemoryContextItem
+from app.memory.schemas import MemoryStatus
+
+
+class MockReasoningService:
+    def __init__(self, proposed_steps=None):
+        self.proposed_steps = proposed_steps or [
+            "Inspect the project structure.",
+            "Identify the main components.",
+            "Analyze dependencies.",
+            "Determine required improvements.",
+            "Prepare the implementation plan.",
+        ]
+        self.last_request = None
+
+    def generate(self, request):
+        self.last_request = request
+
+        return ReasoningResponse(
+            request_id=request.request_id,
+            task_id=request.task_id,
+            reasoning_summary="A structured plan for the requested task.",
+            proposed_steps=self.proposed_steps,
+            confidence=0.9,
+            limitations=[],
+        )
+
+
+def create_agent():
+    reasoning_service = MockReasoningService()
+    return PlanningAgent(reasoning_service=reasoning_service)
+
 
 def create_memory_context(task_id, status, summary):
     memory = MemoryContextItem(
@@ -27,23 +55,27 @@ def create_memory_context(task_id, status, summary):
     )
 
 
-def test_planning_agent_creates_plan():
-    agent = PlanningAgent()
-    task_id = uuid4()
+def create_message(task_id=None, **kwargs):
+    message_data = {
+        "task_id": task_id or uuid4(),
+        "sender": "Coordinator",
+        "recipient": "PlanningAgent",
+        "message_type": MessageType.TASK,
+        "payload": {"objective": "Analyze my project"},
+    }
+    message_data.update(kwargs)
 
-    message = AgentMessage(
-        task_id=task_id,
-        sender="Coordinator",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Analyze my project"},
-    )
+    return AgentMessage(**message_data)
+
+def test_planning_agent_creates_plan():
+    agent = create_agent()
+    message = create_message()
 
     response = agent.process(message)
 
     assert response.sender == "PlanningAgent"
     assert response.recipient == "Coordinator"
-    assert response.task_id == task_id
+    assert response.task_id == message.task_id
     assert response.message_type == MessageType.RESULT
     assert response.in_reply_to == message.message_id
 
@@ -52,33 +84,25 @@ def test_planning_agent_creates_plan():
     assert plan.objective == "Analyze my project"
     assert len(plan.steps) == 5
     assert plan.requires_approval is True
+    assert response.metadata["reasoning"]["model_generated"] is True
 
 
 def test_planning_agent_rejects_missing_objective():
-    agent = PlanningAgent()
+    agent = create_agent()
 
-    message = AgentMessage(
-        task_id=uuid4(),
-        sender="Coordinator",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-    )
-
+    message = create_message(payload={})
     response = agent.process(message)
 
     assert response.message_type == MessageType.ERROR
     assert "objective" in response.payload["error"].lower()
 
+
 def test_planning_agent_uses_successful_memories():
-    agent = PlanningAgent()
+    agent = create_agent()
     task_id = uuid4()
 
-    message = AgentMessage(
+    message = create_message(
         task_id=task_id,
-        sender="Coordinator",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Analyze my project"},
         memory_context=create_memory_context(
             task_id,
             MemoryStatus.COMPLETED,
@@ -89,52 +113,37 @@ def test_planning_agent_uses_successful_memories():
     response = agent.process(message)
 
     assert response.message_type == MessageType.RESULT
-    assert len(response.payload["steps"]) == 6
-    assert any(
-        "previously completed tasks" in step
-        for step in response.payload["steps"]
-    )
+    assert response.metadata["memory_influence"]["selected_count"] == 1
     assert response.metadata["memory_influence"]["completed_count"] == 1
+    assert response.metadata["memory_influence"]["failed_count"] == 0
 
 
 def test_planning_agent_learns_from_failed_memories():
-    agent = PlanningAgent()
+    agent = create_agent()
     task_id = uuid4()
 
-    message = AgentMessage(
+    message = create_message(
         task_id=task_id,
-        sender="Coordinator",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Analyze my project"},
         memory_context=create_memory_context(
             task_id,
             MemoryStatus.FAILED,
-            "Analyze project structure and dependency problems",
+            "Analyze project structure and dependencies",
         ),
     )
 
     response = agent.process(message)
 
     assert response.message_type == MessageType.RESULT
-    assert len(response.payload["steps"]) == 6
-    assert any(
-        "preventive checks" in step
-        for step in response.payload["steps"]
-    )
+    assert response.metadata["memory_influence"]["selected_count"] == 1
     assert response.metadata["memory_influence"]["failed_count"] == 1
 
 
 def test_planning_agent_ignores_irrelevant_memories():
-    agent = PlanningAgent()
+    agent = create_agent()
     task_id = uuid4()
 
-    message = AgentMessage(
+    message = create_message(
         task_id=task_id,
-        sender="Coordinator",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Analyze my project"},
         memory_context=create_memory_context(
             task_id,
             MemoryStatus.COMPLETED,
@@ -145,20 +154,15 @@ def test_planning_agent_ignores_irrelevant_memories():
     response = agent.process(message)
 
     assert response.message_type == MessageType.RESULT
-    assert len(response.payload["steps"]) == 5
     assert response.metadata["memory_influence"]["selected_count"] == 0
 
 
 def test_planning_agent_handles_empty_memory_context():
-    agent = PlanningAgent()
+    agent = create_agent()
     task_id = uuid4()
 
-    message = AgentMessage(
+    message = create_message(
         task_id=task_id,
-        sender="Coordinator",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Analyze my project"},
         memory_context=MemoryContext(
             task_id=task_id,
             recipient_agent="PlanningAgent",
@@ -169,41 +173,32 @@ def test_planning_agent_handles_empty_memory_context():
     response = agent.process(message)
 
     assert response.message_type == MessageType.RESULT
-    assert len(response.payload["steps"]) == 5
     assert response.metadata["memory_influence"]["selected_count"] == 0
 
+
 def test_rejects_memory_context_for_another_agent():
+    agent = create_agent()
     task_id = uuid4()
 
-    memory_context = MemoryContext(
+    message = create_message(
         task_id=task_id,
-        recipient_agent="FileAnalysisAgent",
-        memories=[],
+        memory_context=MemoryContext(
+            task_id=task_id,
+            recipient_agent="FileAnalysisAgent",
+            memories=[],
+        ),
     )
 
-    message = AgentMessage(
-        task_id=task_id,
-        sender="CoordinatorAgent",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Create a project analysis plan"},
-        memory_context=memory_context,
-    )
-
-    response = PlanningAgent().process(message)
+    response = agent.process(message)
 
     assert response.message_type == MessageType.ERROR
-    assert response.payload["error"] == (
-        "Memory context recipient mismatch."
-    )
+    assert response.payload["error"] == "Memory context recipient mismatch."
+
 
 def test_rejects_memory_context_from_another_task():
-    message = AgentMessage(
-        task_id=uuid4(),
-        sender="CoordinatorAgent",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Create a project analysis plan"},
+    agent = create_agent()
+
+    message = create_message(
         memory_context=MemoryContext(
             task_id=uuid4(),
             recipient_agent="PlanningAgent",
@@ -211,44 +206,48 @@ def test_rejects_memory_context_from_another_task():
         ),
     )
 
-    response = PlanningAgent().process(message)
+    response = agent.process(message)
 
     assert response.message_type == MessageType.ERROR
-    assert response.payload["error"] == (
-        "Memory context task ID mismatch."
-    )
+    assert response.payload["error"] == "Memory context task ID mismatch."
+
 
 def test_unselected_memory_does_not_influence_plan():
+    agent = create_agent()
     task_id = uuid4()
 
-    memory = MemoryContextItem(
-        source_task_id=uuid4(),
-        intent="plan_task",
-        status=MemoryStatus.FAILED,
-        agent_name="PlanningAgent",
-        summary="Configure an unrelated database backup process.",
-        completed_at=datetime.now(timezone.utc),
-    )
-
-    message = AgentMessage(
+    message = create_message(
         task_id=task_id,
-        sender="CoordinatorAgent",
-        recipient="PlanningAgent",
-        message_type=MessageType.TASK,
-        payload={"objective": "Create a project analysis plan"},
-        memory_context=MemoryContext(
-            task_id=task_id,
-            recipient_agent="PlanningAgent",
-            memories=[memory],
+        memory_context=create_memory_context(
+            task_id,
+            MemoryStatus.FAILED,
+            "Configure an unrelated database backup process.",
         ),
     )
 
-    response = PlanningAgent().process(message)
+    response = agent.process(message)
 
     assert response.message_type == MessageType.RESULT
-    assert len(response.payload["steps"]) == 5
+    assert response.metadata["memory_influence"]["selected_count"] == 0
+def test_selected_memories_are_passed_to_reasoning_service():
+    reasoning_service = MockReasoningService()
+    agent = PlanningAgent(reasoning_service=reasoning_service)
 
-    influence = response.metadata["memory_influence"]
+    task_id = uuid4()
+    summary = "Analyze project structure and dependencies"
 
-    assert influence["selected_count"] == 0
-    assert influence["failed_count"] == 0
+    message = create_message(
+        task_id=task_id,
+        memory_context=create_memory_context(
+            task_id,
+            MemoryStatus.COMPLETED,
+            summary,
+        ),
+    )
+
+    response = agent.process(message)
+
+    assert response.message_type == MessageType.RESULT
+    assert reasoning_service.last_request is not None
+    assert "episodic" in reasoning_service.last_request.context
+    assert summary in reasoning_service.last_request.context

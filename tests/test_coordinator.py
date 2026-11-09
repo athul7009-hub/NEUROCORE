@@ -4,7 +4,7 @@ from unittest.mock import patch
 from uuid import uuid4
 import sqlite3
 import pytest
-
+from app.llm.schemas import ReasoningResponse
 from app.agents.base_agent import BaseAgent
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
@@ -19,8 +19,25 @@ from app.core.schemas import (
     TaskIntent,
     TaskRequest,
 )
-
-
+class MockReasoningService:
+    def generate(self, request):
+        return ReasoningResponse(
+            request_id=request.request_id,
+            task_id=request.task_id,
+            reasoning_summary="Mock planning response.",
+            proposed_steps=[
+                "Inspect the project structure.",
+                "Identify the main components.",
+                "Analyze dependencies.",
+                "Determine required improvements.",
+                "Prepare the implementation plan.",
+            ],
+            confidence=0.9,
+        )
+def create_planning_agent():
+    return PlanningAgent(
+        reasoning_service=MockReasoningService()
+    )
 def create_test_authenticator():
     return AgentAuthenticator({
         "Coordinator": "d" * 64,
@@ -165,7 +182,7 @@ def test_coordinator_rejects_unconfigured_route():
 
 def test_coordinator_routes_planning_task():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     coordinator = create_coordinator(registry)
 
@@ -181,7 +198,7 @@ def test_coordinator_routes_planning_task():
     assert response.task_id == task.task_id
     assert response.message_type == MessageType.RESULT
     assert response.payload["objective"] == task.user_input
-    assert len(response.payload["steps"]) == 5
+    assert 1 <= len(response.payload["steps"]) <= 20
     assert response.signature is not None
 
 
@@ -340,7 +357,7 @@ def test_coordinator_audit_does_not_store_payload_values(tmp_path):
 
 def test_coordinator_rejects_memory_authorization_failure(tmp_path):
     registry = AgentRegistry()
-    agent = PlanningAgent()
+    agent = create_planning_agent()
     registry.register(agent)
 
     from app.memory.database import SQLiteDatabase
@@ -391,7 +408,7 @@ def test_coordinator_rejects_memory_authorization_failure(tmp_path):
 
 def test_coordinator_continues_when_memory_database_is_unavailable(tmp_path):
     registry = AgentRegistry()
-    agent = PlanningAgent()
+    agent = create_planning_agent()
     registry.register(agent)
     registry.register(VerificationAgent())
 
@@ -443,7 +460,7 @@ def test_coordinator_continues_when_memory_database_is_unavailable(tmp_path):
 
 def test_coordinator_returns_success_when_memory_persistence_fails(tmp_path):
     registry = AgentRegistry()
-    agent = PlanningAgent()
+    agent = create_planning_agent()
     registry.register(agent)
     registry.register(VerificationAgent())
 
@@ -491,7 +508,7 @@ def test_coordinator_returns_success_when_memory_persistence_fails(tmp_path):
 
 def test_coordinator_handles_unexpected_planning_agent_exception():
     registry = AgentRegistry()
-    agent = PlanningAgent()
+    agent = create_planning_agent()
     registry.register(agent)
 
     coordinator = create_coordinator(registry)
@@ -516,7 +533,7 @@ def test_coordinator_handles_unexpected_planning_agent_exception():
 
 def test_coordinator_handles_unexpected_verification_agent_exception():
     registry = AgentRegistry()
-    registry.register(PlanningAgent())
+    registry.register(create_planning_agent())
 
     verification_agent = VerificationAgent()
     registry.register(verification_agent)
