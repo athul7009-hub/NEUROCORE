@@ -36,7 +36,15 @@ class SQLiteDatabase:
             ).fetchone()[0]
 
         return result == "ok"
+    def check_foreign_key_integrity(self) -> bool:
+        """Returns whether the database has no foreign-key violations."""
 
+        with self.connection() as connection:
+            violations = connection.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchall()
+
+        return not violations
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
         """Provides a managed database connection."""

@@ -238,7 +238,10 @@ class MemoryManager:
                 + "; ".join(assessment.reasons)
             )
 
-        return self.repository.archive(task_id)
+        return self.repository.archive(
+            task_id,
+            expected_record=record,
+        )
 
     def restore_task(
         self,

@@ -310,8 +310,19 @@ class EpisodicMemoryRepository:
             is_protected=bool(row["is_protected"]),
         )
 
-    def archive(self, task_id: UUID) -> bool:
-        """Archives an active memory without deleting its contents."""
+    def archive(
+        self,
+        task_id: UUID,
+        *,
+        expected_record: EpisodicMemoryRecord,
+    ) -> bool:
+        """Archives a memory only if its retention data is unchanged."""
+
+        if not isinstance(expected_record, EpisodicMemoryRecord):
+            raise TypeError("Expected an EpisodicMemoryRecord.")
+
+        if expected_record.task_id != task_id:
+            raise ValueError("Task ID does not match the expected record.")
 
         now = datetime.now(timezone.utc).isoformat()
 
@@ -322,9 +333,30 @@ class EpisodicMemoryRepository:
                 SET lifecycle_status = 'archived',
                     archived_at = ?
                 WHERE task_id = ?
-                  AND lifecycle_status = 'active'
+                AND lifecycle_status = 'active'
+                AND status = ?
+                AND sensitivity = ?
+                AND completed_at = ?
+                AND use_count = ?
+                AND last_used_at IS ?
+                AND usage_tracked = ?
+                AND is_protected = ?
                 """,
-                (now, str(task_id)),
+                (
+                    now,
+                    str(task_id),
+                    expected_record.status.value,
+                    expected_record.sensitivity.value,
+                    expected_record.completed_at.isoformat(),
+                    expected_record.use_count,
+                    (
+                        expected_record.last_used_at.isoformat()
+                        if expected_record.last_used_at
+                        else None
+                    ),
+                    int(expected_record.usage_tracked),
+                    int(expected_record.is_protected),
+                ),
             )
 
         return cursor.rowcount == 1

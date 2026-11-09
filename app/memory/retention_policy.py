@@ -41,7 +41,13 @@ class MemoryRetentionPolicy:
             if inactivity_days is None else inactivity_days
         )
         self.max_use_count = max_use_count
-
+        for name, value in (
+            ("min_age_days", self.min_age_days),
+            ("inactivity_days", self.inactivity_days),
+            ("max_use_count", self.max_use_count),
+        ):
+            if type(value) is not int:
+                raise TypeError(f"{name} must be an integer.")
         if self.min_age_days < 1 or self.inactivity_days < 1:
             raise ValueError("Retention periods must be positive.")
 
@@ -59,7 +65,10 @@ class MemoryRetentionPolicy:
 
         current_time = now or datetime.now(timezone.utc)
 
-        if current_time.tzinfo is None:
+        if (
+            current_time.tzinfo is None
+            or current_time.utcoffset() is None
+        ):
             raise ValueError("Assessment time must be timezone-aware.")
 
         reasons = []
@@ -84,7 +93,10 @@ class MemoryRetentionPolicy:
         if record.use_count > self.max_use_count:
             reasons.append("Memory usage exceeds the low-usage threshold.")
 
-        if record.completed_at.tzinfo is None:
+        if (
+            record.completed_at.tzinfo is None
+            or record.completed_at.utcoffset() is None
+        ):
             reasons.append("Memory completion timestamp is not timezone-aware.")
         elif record.completed_at > current_time:
             reasons.append("Memory completion timestamp is in the future.")
@@ -95,7 +107,10 @@ class MemoryRetentionPolicy:
 
         last_activity = record.last_used_at or record.completed_at
 
-        if last_activity.tzinfo is None:
+        if (
+            last_activity.tzinfo is None
+            or last_activity.utcoffset() is None
+        ):
             reasons.append("Memory activity timestamp is not timezone-aware.")
         elif last_activity > current_time:
             reasons.append("Memory activity timestamp is in the future.")

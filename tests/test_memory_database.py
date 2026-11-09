@@ -2,7 +2,7 @@
 import sqlite3
 
 import pytest
-
+from threading import Barrier
 from app.memory.database import SQLiteDatabase
 
 from concurrent.futures import ThreadPoolExecutor
@@ -166,6 +166,7 @@ def test_database_handles_concurrent_writes(tmp_path):
 
     assert count == 40
 
+
 def test_database_supports_concurrent_reads_and_writes(tmp_path):
     database = SQLiteDatabase(tmp_path / "test.db")
     database.initialize()
@@ -184,37 +185,178 @@ def test_database_supports_concurrent_reads_and_writes(tmp_path):
             ("Existing memory",),
         )
 
-    barrier = Barrier(2)
+    write_started = Barrier(2)
+    allow_write_to_finish = Barrier(2)
+
+    def write_records():
+        with database.connection() as connection:
+            connection.execute(
+                "INSERT INTO memory_test (content) VALUES (?)",
+                ("New memory",),
+            )
+            write_started.wait()
+            allow_write_to_finish.wait()
 
     def read_records():
-        barrier.wait()
+        write_started.wait()
 
         with database.connection() as connection:
-            return connection.execute(
+            count = connection.execute(
                 "SELECT COUNT(*) FROM memory_test"
             ).fetchone()[0]
 
-    def write_records():
-        barrier.wait()
-
-        with database.connection() as connection:
-            connection.executemany(
-                "INSERT INTO memory_test (content) VALUES (?)",
-                [(f"New memory {i}",) for i in range(20)],
-            )
+        allow_write_to_finish.wait()
+        return count
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        read_future = executor.submit(read_records)
         write_future = executor.submit(write_records)
+        read_future = executor.submit(read_records)
 
         read_count = read_future.result()
         write_future.result()
 
-    assert read_count in (1, 21)
+    assert read_count == 1
 
     with database.connection() as connection:
         final_count = connection.execute(
             "SELECT COUNT(*) FROM memory_test"
         ).fetchone()[0]
 
-    assert final_count == 21
+    assert final_count == 2
+
+def test_database_rejects_invalid_foreign_key(tmp_path):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE parent (
+                id INTEGER PRIMARY KEY
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE child (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER,
+                FOREIGN KEY (parent_id) REFERENCES parent(id)
+            )
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        with database.connection() as connection:
+            connection.execute(
+                "INSERT INTO child (parent_id) VALUES (?)",
+                (999,),
+            )
+def test_database_foreign_key_integrity_check(tmp_path):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute(
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE child (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER REFERENCES parent(id)
+            )
+            """
+        )
+
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            "INSERT INTO child (parent_id) VALUES (999)"
+        )
+
+    with database.connection() as connection:
+        violations = connection.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+
+    assert len(violations) == 1
+
+def test_database_foreign_key_integrity_passes_for_healthy_database(
+    tmp_path,
+):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute(
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE child (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER REFERENCES parent(id)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO parent (id) VALUES (1)"
+        )
+        connection.execute(
+            "INSERT INTO child (parent_id) VALUES (1)"
+        )
+
+    assert database.check_foreign_key_integrity() is True
+def test_database_closes_connection_after_successful_transaction(
+    tmp_path,
+):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute("CREATE TABLE memory_test (id INTEGER)")
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
+
+def test_database_waits_for_locked_database(tmp_path):
+    from threading import Event, Thread
+    from time import sleep
+
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute(
+            "CREATE TABLE memory_test (id INTEGER PRIMARY KEY)"
+        )
+
+    lock_acquired = Event()
+
+    def hold_write_lock():
+        with sqlite3.connect(database.database_path) as lock_connection:
+            lock_connection.execute("BEGIN IMMEDIATE")
+            lock_acquired.set()
+
+            sleep(0.3)
+
+            lock_connection.rollback()
+
+    locker = Thread(target=hold_write_lock)
+    locker.start()
+
+    assert lock_acquired.wait(timeout=2)
+
+    with database.connection() as connection:
+        connection.execute(
+            "INSERT INTO memory_test DEFAULT VALUES"
+        )
+
+    locker.join()
+
+    with database.connection() as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM memory_test"
+        ).fetchone()[0]
+
+    assert count == 1

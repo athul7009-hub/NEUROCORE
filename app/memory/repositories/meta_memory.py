@@ -251,6 +251,7 @@ class MetaMemoryRepository:
         return cursor.rowcount > 0
 
 
+
     def update_assessment(
         self,
         meta_id: UUID,
@@ -259,10 +260,21 @@ class MetaMemoryRepository:
         assessment_confidence: float,
         staleness_status: MetaMemoryStalenessStatus,
         assessed_at: datetime,
+        expected_usage_count: int,
     ) -> bool:
-        """Update assessment fields without overwriting usage information."""
+        """Persist assessment only if usage has not changed."""
+
         if not isinstance(meta_id, UUID):
             raise TypeError("meta_id must be a UUID")
+
+        if (
+            isinstance(expected_usage_count, bool)
+            or not isinstance(expected_usage_count, int)
+        ):
+            raise TypeError("expected_usage_count must be an integer")
+
+        if expected_usage_count < 0:
+            raise ValueError("expected_usage_count cannot be negative")
 
         if quality_score is not None:
             if (
@@ -309,6 +321,7 @@ class MetaMemoryRepository:
                     last_assessed_at = ?,
                     updated_at = ?
                 WHERE meta_id = ?
+                  AND usage_count = ?
                 """,
                 (
                     quality_score,
@@ -317,6 +330,7 @@ class MetaMemoryRepository:
                     assessed_timestamp.isoformat(),
                     now.isoformat(),
                     str(meta_id),
+                    expected_usage_count,
                 ),
             )
 

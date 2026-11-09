@@ -175,3 +175,58 @@ def test_naive_assessment_time_is_rejected(policy):
 def test_invalid_record_is_rejected(policy):
     with pytest.raises(TypeError):
         policy.assess({"summary": "Invalid"})
+
+def test_memory_at_exact_retention_threshold_is_eligible(policy, now):
+    threshold = now - timedelta(days=90)
+
+    record = create_record(
+        completed_at=threshold,
+        last_used_at=threshold,
+    )
+
+    assessment = policy.assess(record, now=now)
+
+    assert assessment.eligible is True
+
+
+def test_memory_just_before_retention_threshold_is_not_eligible(
+    policy,
+    now,
+):
+    threshold = now - timedelta(days=90) + timedelta(microseconds=1)
+
+    record = create_record(
+        completed_at=threshold,
+        last_used_at=threshold,
+    )
+
+    assessment = policy.assess(record, now=now)
+
+    assert assessment.eligible is False
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min_age_days": True},
+        {"inactivity_days": False},
+        {"max_use_count": True},
+        {"min_age_days": 90.5},
+        {"inactivity_days": "90"},
+        {"max_use_count": 1.5},
+    ],
+)
+def test_invalid_retention_configuration_types_are_rejected(kwargs):
+    with pytest.raises(TypeError):
+        MemoryRetentionPolicy(**kwargs)
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min_age_days": 0},
+        {"min_age_days": -1},
+        {"inactivity_days": 0},
+        {"inactivity_days": -1},
+        {"max_use_count": -1},
+    ],
+)
+def test_invalid_retention_configuration_values_are_rejected(kwargs):
+    with pytest.raises(ValueError):
+        MemoryRetentionPolicy(**kwargs)

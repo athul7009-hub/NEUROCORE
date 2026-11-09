@@ -1,3 +1,4 @@
+
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -37,11 +38,22 @@ def create_record():
     )
 
 
+def archive_record(repository, record):
+    stored_record = repository.get(record.task_id)
+
+    assert stored_record is not None
+
+    return repository.archive(
+        record.task_id,
+        expected_record=stored_record,
+    )
+
+
 def test_archive_preserves_original_memory(repository):
     record = create_record()
     repository.save(record)
 
-    assert repository.archive(record.task_id) is True
+    assert archive_record(repository, record) is True
 
     assert repository.get(record.task_id) is None
 
@@ -58,21 +70,30 @@ def test_archive_preserves_original_memory(repository):
 
 
 def test_archive_missing_memory_returns_false(repository):
-    assert repository.archive(uuid4()) is False
+    record = create_record()
+
+    assert repository.archive(
+        record.task_id,
+        expected_record=record,
+    ) is False
 
 
 def test_archive_already_archived_memory_returns_false(repository):
     record = create_record()
     repository.save(record)
 
-    assert repository.archive(record.task_id) is True
-    assert repository.archive(record.task_id) is False
+    assert archive_record(repository, record) is True
+    assert repository.archive(
+        record.task_id,
+        expected_record=record,
+    ) is False
 
 
 def test_restore_archived_memory(repository):
     record = create_record()
     repository.save(record)
-    repository.archive(record.task_id)
+
+    assert archive_record(repository, record) is True
 
     assert repository.restore(record.task_id) is True
 
@@ -96,7 +117,8 @@ def test_archived_query_returns_only_archived_records(repository):
 
     repository.save(active)
     repository.save(archived)
-    repository.archive(archived.task_id)
+
+    assert archive_record(repository, archived) is True
 
     results = repository.get_archived()
 
@@ -112,8 +134,9 @@ def test_archived_query_supports_filters(repository):
 
     repository.save(first)
     repository.save(second)
-    repository.archive(first.task_id)
-    repository.archive(second.task_id)
+
+    assert archive_record(repository, first) is True
+    assert archive_record(repository, second) is True
 
     results = repository.get_archived(intent="file_analysis")
 

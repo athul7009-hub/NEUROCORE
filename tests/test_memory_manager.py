@@ -373,7 +373,10 @@ def test_archive_requires_coordinator(manager):
 def test_restore_requires_coordinator(manager):
     record = create_archivable_record()
     manager.remember_task(record)
-    manager.repository.archive(record.task_id)
+    manager.repository.archive(
+        record.task_id,
+        expected_record=record,
+    )
 
     with pytest.raises(PermissionError, match="Only the coordinator"):
         manager.restore_task(
@@ -385,7 +388,10 @@ def test_restore_requires_coordinator(manager):
 def test_archived_memories_are_retrievable_as_history(manager):
     record = create_archivable_record()
     manager.remember_task(record)
-    manager.repository.archive(record.task_id)
+    manager.repository.archive(
+        record.task_id,
+        expected_record=record,
+    )
 
     # Archived memories must not appear in normal retrieval.
     assert manager.get_task(
@@ -405,7 +411,10 @@ def test_archived_memories_are_retrievable_as_history(manager):
 def test_archived_retrieval_rejects_untrusted_agent(manager):
     record = create_archivable_record()
     manager.remember_task(record)
-    manager.repository.archive(record.task_id)
+    manager.repository.archive(
+        record.task_id,
+        expected_record=record,
+    )
 
     with pytest.raises(PermissionError, match="Unauthorized"):
         manager.get_archived_tasks(
@@ -416,7 +425,10 @@ def test_archived_retrieval_rejects_untrusted_agent(manager):
 def test_restore_returns_memory_to_active_retrieval(manager):
     record = create_archivable_record()
     manager.remember_task(record)
-    manager.repository.archive(record.task_id)
+    manager.repository.archive(
+        record.task_id,
+        expected_record=record,
+    )
 
     restored = manager.restore_task(
         record.task_id,
@@ -434,7 +446,66 @@ def test_restore_returns_memory_to_active_retrieval(manager):
     assert retrieved.lifecycle_status == MemoryLifecycleStatus.ACTIVE
     assert retrieved.archived_at is None
 
+def test_archiving_same_memory_twice_returns_false(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
 
+    first = manager.archive_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    second = manager.archive_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert first is True
+    assert second is False
+
+
+def test_restoring_same_memory_twice_returns_false(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+
+    manager.archive_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    first = manager.restore_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    second = manager.restore_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert first is True
+    assert second is False
+
+
+def test_archiving_preserves_memory_content(manager):
+    record = create_archivable_record()
+    manager.remember_task(record)
+
+    manager.archive_task(
+        record.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    archived = manager.repository.get(
+        record.task_id,
+        include_archived=True,
+    )
+
+    assert archived is not None
+    assert archived.summary == record.summary
+    assert archived.intent == record.intent
+    assert archived.task_id == record.task_id
+    assert archived.lifecycle_status == MemoryLifecycleStatus.ARCHIVED
 def test_archive_ineligible_memory_is_rejected(manager):
     record = create_record()
     manager.remember_task(record)
@@ -478,3 +549,28 @@ def test_remember_task_rejects_archived_record(manager):
 
     with pytest.raises(ValueError, match="active lifecycle"):
         manager.remember_task(record)
+def test_archive_rejects_memory_when_usage_changes_after_assessment(
+    manager,
+):
+    record = create_archivable_record()
+    manager.remember_task(record)
+
+    # Capture the record used for the original retention assessment.
+    assessed_record = manager.repository.get(record.task_id)
+    assert assessed_record is not None
+
+    # Simulate concurrent usage after assessment.
+    assert manager.repository.record_usage(record.task_id) is True
+
+    # The old snapshot must no longer authorize archival.
+    archived = manager.repository.archive(
+        record.task_id,
+        expected_record=assessed_record,
+    )
+
+    assert archived is False
+
+    current = manager.repository.get(record.task_id)
+    assert current is not None
+    assert current.lifecycle_status == MemoryLifecycleStatus.ACTIVE
+    assert current.use_count == 1

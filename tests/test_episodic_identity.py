@@ -54,9 +54,17 @@ def test_inspect_active_identity(memory_manager):
 
 def test_inspect_archived_identity(memory_manager):
     task_id = uuid4()
-    memory_manager.repository.save(create_record(task_id))
+    record = create_record(task_id)
+    memory_manager.repository.save(record)
 
-    assert memory_manager.repository.archive(task_id)
+    stored_record = memory_manager.repository.get(task_id)
+
+    assert stored_record is not None
+
+    assert memory_manager.repository.archive(
+        task_id,
+        expected_record=stored_record,
+    ) is True
 
     result = memory_manager.inspect_identity(
         task_id,

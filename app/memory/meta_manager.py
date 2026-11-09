@@ -206,6 +206,7 @@ class MetaMemoryManager:
             assessment_confidence=assessment.assessment_confidence,
             staleness_status=assessment.staleness_status,
             assessed_at=assessment.assessed_at,
+            expected_usage_count=record.usage_count,
         )
 
         if not updated:
@@ -213,6 +214,7 @@ class MetaMemoryManager:
 
         return assessment
    
+
     def update_assessment(
         self,
         meta_id: UUID,
@@ -228,15 +230,14 @@ class MetaMemoryManager:
 
         if not isinstance(meta_id, UUID):
             raise TypeError("Meta-memory ID must be a UUID.")
+
         if quality_score is not None:
             if (
                 isinstance(quality_score, bool)
                 or not isinstance(quality_score, (int, float))
                 or not 0 <= quality_score <= 1
             ):
-                raise ValueError(
-                    "quality_score must be between 0 and 1."
-                )
+                raise ValueError("quality_score must be between 0 and 1.")
 
         if (
             isinstance(assessment_confidence, bool)
@@ -246,21 +247,27 @@ class MetaMemoryManager:
             raise ValueError(
                 "assessment_confidence must be between 0 and 1."
             )
+
         if not isinstance(
             staleness_status,
             MetaMemoryStalenessStatus,
         ):
             raise TypeError("Invalid staleness status.")
 
-        now = self._current_time()
+        record = self.repository.get(meta_id)
+
+        if record is None:
+            return False
 
         return self.repository.update_assessment(
             meta_id,
             quality_score=quality_score,
             assessment_confidence=assessment_confidence,
             staleness_status=staleness_status,
-            assessed_at=now,
+            assessed_at=self._current_time(),
+            expected_usage_count=record.usage_count,
         )
+
 
 
     def record_usage(

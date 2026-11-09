@@ -569,3 +569,48 @@ def test_assess_and_persist_uses_generated_assessment_values(
     assert stored.assessment_confidence == 0.6
     assert stored.staleness_status == MetaMemoryStalenessStatus.CURRENT
     assert stored.last_assessed_at == expected.assessed_at
+
+def test_assess_and_persist_rejects_stale_usage_snapshot(manager, record):
+    manager.remember(record, requesting_agent="CoordinatorAgent")
+
+    class ConcurrentUsageEngine:
+        def assess(self, received_record, *, now=None):
+            # Simulate another agent retrieving the memory
+            # after the assessment snapshot was captured.
+            manager.record_usage(
+                received_record.memory_type,
+                received_record.memory_id,
+                requesting_agent="PlanningAgent",
+            )
+
+            return MetaMemoryAssessment(
+                quality_score=0.8,
+                assessment_confidence=0.8,
+                staleness_status=MetaMemoryStalenessStatus.CURRENT,
+                assessed_at=datetime.now(timezone.utc),
+                rationale="Concurrency regression test",
+            )
+
+    custom_manager = MetaMemoryManager(
+        manager.repository,
+        assessment_engine=ConcurrentUsageEngine(),
+    )
+
+    result = custom_manager.assess_and_persist(
+        record.meta_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert result is None
+
+    stored = manager.get(
+        record.meta_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert stored.usage_count == 1
+    assert stored.last_retrieved_at is not None
+    assert stored.quality_score is None
+    assert stored.assessment_confidence is None
+    assert stored.last_assessed_at is None
+    assert stored.staleness_status == MetaMemoryStalenessStatus.UNKNOWN

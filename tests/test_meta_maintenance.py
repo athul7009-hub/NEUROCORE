@@ -99,6 +99,7 @@ def test_reassesses_old_assessments(manager, maintenance):
                 now=old_time,
             ).staleness_status,
             assessed_at=old_time,
+            expected_usage_count=record.usage_count,
         )
 
     report = maintenance.maintain(
