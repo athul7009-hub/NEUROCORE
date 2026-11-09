@@ -51,6 +51,7 @@ class OllamaClient:
         self,
         messages: list[dict[str, str]],
         model: str | None = None,
+        format: str | dict | None = None,
     ) -> str:
         """Send a chat request and return the model's response."""
 
@@ -72,6 +73,9 @@ class OllamaClient:
             "messages": messages,
             "stream": False,
         }
+
+        if format is not None:
+            payload["format"] = format
 
         request = Request(
             url=f"{self.base_url}/api/chat",
