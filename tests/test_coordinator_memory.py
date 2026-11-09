@@ -1,27 +1,50 @@
-import pytest
+
+import sqlite3
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
-import sqlite3
+
+import pytest
+
 from tests.fakes import create_planning_agent
+
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
-
 from app.agents.registry import AgentRegistry
 from app.agents.verification_agent import VerificationAgent
+
 from app.core.agent_auth import AgentAuthenticator
 from app.core.schemas import TaskIntent, TaskRequest, MessageType
+
 from app.memory.database import SQLiteDatabase
 from app.memory.manager import MemoryManager
 from app.memory.meta_schemas import MetaMemoryType
-from app.memory.repositories.episodic_memory import (
-    EpisodicMemoryRepository,
-)
 from app.memory.schemas import (
     EpisodicMemoryRecord,
     MemoryStatus,
 )
+
+from app.memory.repositories.episodic_memory import (
+    EpisodicMemoryRepository,
+)
+from app.memory.repositories.semantic_memory import (
+    SemanticMemoryRepository,
+)
+from app.memory.repositories.procedural_memory import (
+    ProceduralMemoryRepository,
+)
+from app.memory.repositories.working_memory import (
+    WorkingMemoryRepository,
+)
+from app.memory.repositories.prospective_memory import (
+    ProspectiveMemoryRepository,
+)
+
+from app.memory.semantic_manager import SemanticMemoryManager
+from app.memory.procedural_manager import ProceduralMemoryManager
+from app.memory.working_manager import WorkingMemoryManager
+from app.memory.prospective_manager import ProspectiveMemoryManager
 
 
 @pytest.fixture
@@ -574,6 +597,48 @@ def test_context_usage_failure_does_not_raise():
     coordinator._record_context_usage(request)
 
 
+def test_context_usage_continues_after_individual_failure():
+    registry = AgentRegistry()
+    registry.register(create_planning_agent())
+
+    meta_manager = Mock()
+    meta_manager.record_usage.side_effect = [
+        OSError("Metadata database unavailable."),
+        None,
+        None,
+    ]
+
+    coordinator = create_coordinator(
+        registry,
+        Mock(),
+        meta_memory_manager=meta_manager,
+    )
+
+    memory_ids = [uuid4(), uuid4(), uuid4()]
+
+    request = SimpleNamespace(
+        recipient="PlanningAgent",
+        memory_context=SimpleNamespace(
+            memories=[
+                SimpleNamespace(source_task_id=memory_id)
+                for memory_id in memory_ids
+            ],
+        ),
+        semantic_context=None,
+        procedural_context=None,
+        working_memory_context=None,
+        prospective_context=None,
+    )
+
+    coordinator._record_context_usage(request)
+
+    assert meta_manager.record_usage.call_count == 3
+    assert [
+        call.args[1]
+        for call in meta_manager.record_usage.call_args_list
+    ] == [str(memory_id) for memory_id in memory_ids]
+
+
 def test_context_usage_tracks_multiple_selected_memories():
     registry = AgentRegistry()
     registry.register(create_planning_agent())
@@ -611,6 +676,89 @@ def test_context_usage_tracks_multiple_selected_memories():
     ]
 
     assert recorded_ids == [str(memory_id) for memory_id in memory_ids]
+
+
+def test_context_building_continues_after_individual_database_failure(
+    memory_manager,
+):
+    database = memory_manager.repository.database
+
+    semantic_manager = SemanticMemoryManager(
+        SemanticMemoryRepository(database)
+    )
+    procedural_manager = ProceduralMemoryManager(
+        ProceduralMemoryRepository(database)
+    )
+    working_manager = WorkingMemoryManager(
+        WorkingMemoryRepository(database)
+    )
+    prospective_manager = ProspectiveMemoryManager(
+        ProspectiveMemoryRepository(database)
+    )
+
+    semantic_manager.initialize()
+    procedural_manager.initialize()
+    working_manager.initialize()
+    prospective_manager.initialize()
+
+    registry = AgentRegistry()
+
+    planning_agent = create_planning_agent()
+    registry.register(planning_agent)
+    registry.register(VerificationAgent())
+
+    authenticator = create_authenticator()
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
+
+    coordinator = Coordinator(
+        registry,
+        authenticator,
+        memory_manager=memory_manager,
+        semantic_memory_manager=semantic_manager,
+        procedural_memory_manager=procedural_manager,
+        working_memory_manager=working_manager,
+        prospective_memory_manager=prospective_manager,
+    )
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    with (
+        patch.object(
+            coordinator.semantic_context_builder,
+            "build_context",
+            side_effect=sqlite3.OperationalError(
+                "Database unavailable."
+            ),
+        ) as semantic_mock,
+        patch.object(
+            coordinator.procedural_context_builder,
+            "build_context",
+            return_value=None,
+        ) as procedural_mock,
+        patch.object(
+            coordinator.working_context_builder,
+            "build_context",
+            return_value=None,
+        ) as working_mock,
+        patch.object(
+            coordinator.prospective_context_builder,
+            "build_context",
+            return_value=None,
+        ) as prospective_mock,
+    ):
+        response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.RESULT
+
+    assert semantic_mock.call_count == 2
+    assert procedural_mock.call_count == 2
+    assert working_mock.call_count == 2
+    assert prospective_mock.call_count == 2
 
 
 def test_usage_tracking_runs_for_planning_agent(memory_manager):
