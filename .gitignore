@@ -25,3 +25,9 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local runtime data and databases
+data/
+*.db
+*.sqlite
+*.sqlite3
