@@ -370,3 +370,112 @@ def test_initialize_is_idempotent(repository):
     repository.initialize()
 
     assert repository.search() == []
+
+
+def test_record_usage_does_not_overwrite_newer_timestamp(
+    repository,
+    valid_record,
+):
+    from datetime import timedelta
+
+    repository.save(valid_record)
+
+    newer = datetime.now(timezone.utc)
+    older = newer - timedelta(days=2)
+
+    repository.record_usage(
+        valid_record.memory_type,
+        valid_record.memory_id,
+        retrieved_at=newer,
+    )
+
+    repository.record_usage(
+        valid_record.memory_type,
+        valid_record.memory_id,
+        retrieved_at=older,
+    )
+
+    stored = repository.get(valid_record.meta_id)
+
+    assert stored is not None
+    assert stored.usage_count == 2
+    assert stored.last_retrieved_at == newer
+
+
+def test_record_usage_rejects_future_timestamp(
+    repository,
+    valid_record,
+):
+    from datetime import timedelta
+
+    repository.save(valid_record)
+
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+
+    with pytest.raises(ValueError):
+        repository.record_usage(
+            valid_record.memory_type,
+            valid_record.memory_id,
+            retrieved_at=future,
+        )
+
+
+def test_record_usage_rejects_boolean_timestamp_value(
+    repository,
+    valid_record,
+):
+    repository.save(valid_record)
+
+    with pytest.raises(ValueError):
+        repository.record_usage(
+            valid_record.memory_type,
+            valid_record.memory_id,
+            retrieved_at=True,
+        )
+
+def test_record_usage_invalidates_previous_assessment(
+    repository,
+    valid_record,
+):
+    from datetime import datetime, timezone
+
+    assessed_record = valid_record.model_copy(
+        update={
+            "quality_score": 0.8,
+            "assessment_confidence": 0.9,
+            "last_assessed_at": datetime.now(timezone.utc),
+            "staleness_status": MetaMemoryStalenessStatus.CURRENT,
+        }
+    )
+
+    repository.save(assessed_record)
+
+    repository.record_usage(
+        assessed_record.memory_type,
+        assessed_record.memory_id,
+    )
+
+    stored = repository.get(assessed_record.meta_id)
+
+    assert stored is not None
+    assert stored.usage_count == assessed_record.usage_count + 1
+    assert stored.quality_score is None
+    assert stored.assessment_confidence is None
+    assert stored.last_assessed_at is None
+    assert stored.staleness_status == MetaMemoryStalenessStatus.UNKNOWN
+def test_save_and_get_working_memory_preserves_task_id(repository):
+    task_id = uuid4()
+
+    record = MetaMemoryRecord(
+        memory_type=MetaMemoryType.WORKING,
+        memory_id="working-entry-1",
+        task_id=task_id,
+    )
+
+    repository.save(record)
+
+    retrieved = repository.get(record.meta_id)
+
+    assert retrieved is not None
+    assert retrieved.memory_type == MetaMemoryType.WORKING
+    assert retrieved.task_id == task_id

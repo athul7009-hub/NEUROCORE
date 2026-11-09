@@ -175,6 +175,7 @@ class MetaMemoryManager:
             now=now,
         )
 
+   
     def update_assessment(
         self,
         meta_id: UUID,
@@ -184,36 +185,46 @@ class MetaMemoryManager:
         assessment_confidence: float,
         staleness_status: MetaMemoryStalenessStatus,
     ) -> bool:
-        """Explicitly persists an assessment without changing the original memory."""
+        """Persists assessment without overwriting concurrent usage updates."""
 
         self._authorize_coordinator(requesting_agent)
 
         if not isinstance(meta_id, UUID):
             raise TypeError("Meta-memory ID must be a UUID.")
+        if quality_score is not None:
+            if (
+                isinstance(quality_score, bool)
+                or not isinstance(quality_score, (int, float))
+                or not 0 <= quality_score <= 1
+            ):
+                raise ValueError(
+                    "quality_score must be between 0 and 1."
+                )
 
+        if (
+            isinstance(assessment_confidence, bool)
+            or not isinstance(assessment_confidence, (int, float))
+            or not 0 <= assessment_confidence <= 1
+        ):
+            raise ValueError(
+                "assessment_confidence must be between 0 and 1."
+            )
         if not isinstance(
             staleness_status,
             MetaMemoryStalenessStatus,
         ):
             raise TypeError("Invalid staleness status.")
 
-        record = self.repository.get(meta_id)
-
-        if record is None:
-            return False
-
         now = self._current_time()
 
-        updated = MetaMemoryRecord.model_validate({
-            **record.model_dump(),
-            "quality_score": quality_score,
-            "assessment_confidence": assessment_confidence,
-            "staleness_status": staleness_status,
-            "last_assessed_at": now,
-            "updated_at": now,
-        })
+        return self.repository.update_assessment(
+            meta_id,
+            quality_score=quality_score,
+            assessment_confidence=assessment_confidence,
+            staleness_status=staleness_status,
+            assessed_at=now,
+        )
 
-        return self.repository.update(updated)
 
     def record_usage(
         self,

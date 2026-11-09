@@ -11,68 +11,65 @@ from app.memory.meta_schemas import (
 
 
 class MetaMemoryRepository:
-    """Stores and retrieves metadata about existing memories."""
+    """Handles persistent storage and retrieval of meta-memory records."""
 
-    def __init__(self, database: SQLiteDatabase):
+    MAX_LIMIT = 100
+
+    def __init__(self, database: SQLiteDatabase) -> None:
         self.database = database
+        self._create_table()
 
     def initialize(self) -> None:
-        """Creates the meta-memory table and indexes."""
+        """Create or migrate the meta-memory table."""
+        self._create_table()
 
+    def _create_table(self) -> None:
         with self.database.connection() as connection:
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS meta_memory (
+                CREATE TABLE IF NOT EXISTS meta_memories (
                     meta_id TEXT PRIMARY KEY,
                     memory_type TEXT NOT NULL,
                     memory_id TEXT NOT NULL,
+                    task_id TEXT,
                     quality_score REAL,
                     assessment_confidence REAL,
                     usage_count INTEGER NOT NULL DEFAULT 0,
                     last_retrieved_at TEXT,
-                    staleness_status TEXT NOT NULL,
+                    staleness_status TEXT NOT NULL DEFAULT 'unknown',
                     last_assessed_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    UNIQUE(memory_type, memory_id)
+                    UNIQUE (memory_type, memory_id)
                 )
                 """
             )
 
-            indexes = (
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_meta_memory_type
-                ON meta_memory(memory_type)
-                """,
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_meta_memory_staleness
-                ON meta_memory(staleness_status)
-                """,
-                """
-                CREATE INDEX IF NOT EXISTS
-                idx_meta_memory_last_assessed
-                ON meta_memory(last_assessed_at)
-                """,
-            )
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(meta_memories)"
+                ).fetchall()
+            }
 
-            for statement in indexes:
-                connection.execute(statement)
+            if "task_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE meta_memories ADD COLUMN task_id TEXT"
+                )
 
     def save(self, record: MetaMemoryRecord) -> None:
-        """Persists one meta-memory record."""
-
+        """Persist a meta-memory record."""
         if not isinstance(record, MetaMemoryRecord):
-            raise TypeError("Expected a MetaMemoryRecord.")
+            raise TypeError("record must be a MetaMemoryRecord")
 
         with self.database.connection() as connection:
             connection.execute(
                 """
-                INSERT INTO meta_memory (
+                INSERT INTO meta_memories (
                     meta_id,
                     memory_type,
                     memory_id,
+                    task_id,
                     quality_score,
                     assessment_confidence,
                     usage_count,
@@ -82,34 +79,34 @@ class MetaMemoryRepository:
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(record.meta_id),
                     record.memory_type.value,
                     record.memory_id,
+                    str(record.task_id) if record.task_id else None,
                     record.quality_score,
                     record.assessment_confidence,
                     record.usage_count,
                     self._timestamp(record.last_retrieved_at),
                     record.staleness_status.value,
                     self._timestamp(record.last_assessed_at),
-                    record.created_at.isoformat(),
-                    record.updated_at.isoformat(),
+                    self._timestamp(record.created_at),
+                    self._timestamp(record.updated_at),
                 ),
             )
 
     def get(self, meta_id: UUID) -> MetaMemoryRecord | None:
-        """Retrieves metadata by its unique ID."""
-
+        """Retrieve a record by its metadata ID."""
         if not isinstance(meta_id, UUID):
-            raise TypeError("meta_id must be a UUID.")
+            raise TypeError("meta_id must be a UUID")
 
         with self.database.connection() as connection:
             row = connection.execute(
                 """
                 SELECT *
-                FROM meta_memory
+                FROM meta_memories
                 WHERE meta_id = ?
                 """,
                 (str(meta_id),),
@@ -121,63 +118,69 @@ class MetaMemoryRepository:
         self,
         memory_type: MetaMemoryType,
         memory_id: str,
+        task_id: UUID | None = None,
     ) -> MetaMemoryRecord | None:
-        """Retrieves metadata for an original memory."""
-
+        """Retrieve metadata for a specific memory identity."""
         if not isinstance(memory_type, MetaMemoryType):
-            raise TypeError("Invalid meta-memory type.")
+            raise TypeError("memory_type must be a MetaMemoryType")
 
         self._validate_memory_id(memory_id)
+
+        if task_id is not None and not isinstance(task_id, UUID):
+            raise TypeError("task_id must be a UUID or None")
 
         with self.database.connection() as connection:
             row = connection.execute(
                 """
                 SELECT *
-                FROM meta_memory
+                FROM meta_memories
                 WHERE memory_type = ?
                   AND memory_id = ?
+                  AND task_id IS ?
                 """,
-                (memory_type.value, memory_id),
+                (
+                    memory_type.value,
+                    memory_id,
+                    str(task_id) if task_id else None,
+                ),
             ).fetchone()
 
         return self._to_record(row) if row else None
 
     def search(
         self,
-        *,
         memory_type: MetaMemoryType | None = None,
+        *,
         staleness_status: MetaMemoryStalenessStatus | None = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[MetaMemoryRecord]:
-        """Searches metadata using optional exact filters."""
+        """Search metadata records with optional filters and pagination."""
+        if memory_type is not None and not isinstance(
+            memory_type, MetaMemoryType
+        ):
+            raise TypeError("memory_type must be a MetaMemoryType or None")
+
+        if staleness_status is not None and not isinstance(
+            staleness_status, MetaMemoryStalenessStatus
+        ):
+            raise TypeError(
+                "staleness_status must be a MetaMemoryStalenessStatus or None"
+            )
 
         if isinstance(limit, bool) or not isinstance(limit, int):
-            raise TypeError("Limit must be an integer.")
+            raise TypeError("limit must be an integer")
 
-        if not 1 <= limit <= 100:
-            raise ValueError("Limit must be between 1 and 100.")
+        if not 1 <= limit <= self.MAX_LIMIT:
+            raise ValueError(
+                f"limit must be between 1 and {self.MAX_LIMIT}"
+            )
 
         if isinstance(offset, bool) or not isinstance(offset, int):
-            raise TypeError("Offset must be an integer.")
+            raise TypeError("offset must be an integer")
 
         if offset < 0:
-            raise ValueError("Offset cannot be negative.")
-
-        if (
-            memory_type is not None
-            and not isinstance(memory_type, MetaMemoryType)
-        ):
-            raise TypeError("Invalid meta-memory type.")
-
-        if (
-            staleness_status is not None
-            and not isinstance(
-                staleness_status,
-                MetaMemoryStalenessStatus,
-            )
-        ):
-            raise TypeError("Invalid staleness status.")
+            raise ValueError("offset must be non-negative")
 
         conditions = []
         parameters = []
@@ -190,37 +193,35 @@ class MetaMemoryRepository:
             conditions.append("staleness_status = ?")
             parameters.append(staleness_status.value)
 
-        query = "SELECT * FROM meta_memory"
-
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        query += """
-            ORDER BY created_at DESC, rowid DESC
-            LIMIT ? OFFSET ?
-        """
-
-        parameters.extend([limit, offset])
+        where_clause = (
+            f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        )
 
         with self.database.connection() as connection:
             rows = connection.execute(
-                query,
-                parameters,
+                f"""
+                SELECT *
+                FROM meta_memories
+                {where_clause}
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (*parameters, limit, offset),
             ).fetchall()
 
         return [self._to_record(row) for row in rows]
 
     def update(self, record: MetaMemoryRecord) -> bool:
-        """Updates metadata without changing its identity or creation time."""
-
+        """Update an existing record without changing its identity."""
         if not isinstance(record, MetaMemoryRecord):
-            raise TypeError("Expected a MetaMemoryRecord.")
+            raise TypeError("record must be a MetaMemoryRecord")
 
         with self.database.connection() as connection:
             cursor = connection.execute(
                 """
-                UPDATE meta_memory
-                SET quality_score = ?,
+                UPDATE meta_memories
+                SET
+                    quality_score = ?,
                     assessment_confidence = ?,
                     usage_count = ?,
                     last_retrieved_at = ?,
@@ -230,6 +231,7 @@ class MetaMemoryRepository:
                 WHERE meta_id = ?
                   AND memory_type = ?
                   AND memory_id = ?
+                  AND task_id IS ?
                 """,
                 (
                     record.quality_score,
@@ -238,15 +240,85 @@ class MetaMemoryRepository:
                     self._timestamp(record.last_retrieved_at),
                     record.staleness_status.value,
                     self._timestamp(record.last_assessed_at),
-                    record.updated_at.isoformat(),
+                    self._timestamp(record.updated_at),
                     str(record.meta_id),
                     record.memory_type.value,
                     record.memory_id,
+                    str(record.task_id) if record.task_id else None,
                 ),
             )
 
-        return cursor.rowcount == 1
+        return cursor.rowcount > 0
 
+    def update_assessment(
+        self,
+        meta_id: UUID,
+        *,
+        quality_score: float | None,
+        assessment_confidence: float,
+        staleness_status: MetaMemoryStalenessStatus,
+        assessed_at: datetime,
+    ) -> bool:
+        """Update assessment fields without overwriting usage information."""
+        if not isinstance(meta_id, UUID):
+            raise TypeError("meta_id must be a UUID")
+
+        if quality_score is not None:
+            if (
+                isinstance(quality_score, bool)
+                or not isinstance(quality_score, (int, float))
+                or not 0 <= quality_score <= 1
+            ):
+                raise ValueError("quality_score must be between 0 and 1")
+
+        if (
+            isinstance(assessment_confidence, bool)
+            or not isinstance(assessment_confidence, (int, float))
+            or not 0 <= assessment_confidence <= 1
+        ):
+            raise ValueError(
+                "assessment_confidence must be between 0 and 1"
+            )
+
+        if not isinstance(staleness_status, MetaMemoryStalenessStatus):
+            raise TypeError(
+                "staleness_status must be a MetaMemoryStalenessStatus"
+            )
+
+        if not isinstance(assessed_at, datetime):
+            raise TypeError("assessed_at must be a datetime")
+
+        if assessed_at.tzinfo is None or assessed_at.utcoffset() is None:
+            raise ValueError("assessed_at must be timezone-aware")
+
+        if assessed_at.astimezone(timezone.utc) > datetime.now(timezone.utc):
+            raise ValueError("assessed_at cannot be in the future")
+
+        with self.database.connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE meta_memories
+                SET
+                    quality_score = ?,
+                    assessment_confidence = ?,
+                    staleness_status = ?,
+                    last_assessed_at = ?,
+                    updated_at = ?
+                WHERE meta_id = ?
+                """,
+                (
+                    quality_score,
+                    assessment_confidence,
+                    staleness_status.value,
+                    self._timestamp(assessed_at),
+                    self._timestamp(assessed_at),
+                    str(meta_id),
+                ),
+            )
+
+        return cursor.rowcount > 0
+
+    
     def record_usage(
         self,
         memory_type: MetaMemoryType,
@@ -254,79 +326,112 @@ class MetaMemoryRepository:
         *,
         retrieved_at: datetime | None = None,
     ) -> bool:
-        """Atomically increments usage for an existing metadata record.
-
-        Does not create metadata automatically or modify the original memory.
-        """
-
+        """Atomically record usage and invalidate the previous assessment."""
         if not isinstance(memory_type, MetaMemoryType):
-            raise TypeError("Invalid meta-memory type.")
+            raise TypeError("memory_type must be a MetaMemoryType")
 
         self._validate_memory_id(memory_id)
 
-        timestamp = retrieved_at or datetime.now(timezone.utc)
+        retrieved_at = (
+            datetime.now(timezone.utc)
+            if retrieved_at is None
+            else retrieved_at
+        )
 
-        if (
-            not isinstance(timestamp, datetime)
-            or timestamp.tzinfo is None
-            or timestamp.utcoffset() is None
-        ):
-            raise ValueError("Retrieval time must be timezone-aware.")
+        if not isinstance(retrieved_at, datetime):
+            raise ValueError("retrieved_at must be a datetime")
 
-        timestamp_value = timestamp.isoformat()
-        updated_value = datetime.now(timezone.utc).isoformat()
+        if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
+            raise ValueError("retrieved_at must be timezone-aware")
+
+        retrieved_timestamp = retrieved_at.astimezone(timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        if retrieved_timestamp > now:
+            raise ValueError("retrieved_at cannot be in the future")
+
+        retrieved_value = retrieved_timestamp.isoformat()
+        updated_value = now.isoformat()
 
         with self.database.connection() as connection:
             cursor = connection.execute(
                 """
-                UPDATE meta_memory
-                SET usage_count = usage_count + 1,
-                    last_retrieved_at = ?,
+                UPDATE meta_memories
+                SET
+                    usage_count = usage_count + 1,
+                    last_retrieved_at = CASE
+                        WHEN last_retrieved_at IS NULL
+                             OR last_retrieved_at < ?
+                        THEN ?
+                        ELSE last_retrieved_at
+                    END,
+                    quality_score = NULL,
+                    assessment_confidence = NULL,
+                    staleness_status = ?,
+                    last_assessed_at = NULL,
                     updated_at = ?
                 WHERE memory_type = ?
                   AND memory_id = ?
                 """,
                 (
-                    timestamp_value,
+                    retrieved_value,
+                    retrieved_value,
+                    MetaMemoryStalenessStatus.UNKNOWN.value,
                     updated_value,
                     memory_type.value,
                     memory_id,
                 ),
             )
 
-        return cursor.rowcount == 1
+        return cursor.rowcount > 0
+
 
     @staticmethod
     def _validate_memory_id(memory_id: str) -> None:
-        if not isinstance(memory_id, str):
-            raise TypeError("memory_id must be a string.")
-
-        if not memory_id.strip():
-            raise ValueError("memory_id cannot be blank.")
-
-        if len(memory_id) > 100:
-            raise ValueError("memory_id cannot exceed 100 characters.")
+        if not isinstance(memory_id, str) or not memory_id.strip():
+            raise ValueError("memory_id must be a non-empty string")
 
     @staticmethod
     def _timestamp(value: datetime | None) -> str | None:
-        return value.isoformat() if value is not None else None
+        if value is None:
+            return None
+
+        if not isinstance(value, datetime):
+            raise TypeError("timestamp must be a datetime or None")
+
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("timestamp must be timezone-aware")
+
+        return value.astimezone(timezone.utc).isoformat()
 
     @staticmethod
     def _to_record(row) -> MetaMemoryRecord:
-        """Converts a database row into a validated record."""
-
+        """Convert a database row into a validated record."""
         return MetaMemoryRecord(
-            meta_id=row["meta_id"],
+            meta_id=UUID(row["meta_id"]),
             memory_type=MetaMemoryType(row["memory_type"]),
             memory_id=row["memory_id"],
+            task_id=(
+                UUID(row["task_id"])
+                if row["task_id"]
+                else None
+            ),
             quality_score=row["quality_score"],
             assessment_confidence=row["assessment_confidence"],
             usage_count=row["usage_count"],
-            last_retrieved_at=row["last_retrieved_at"],
+            last_retrieved_at=(
+                datetime.fromisoformat(row["last_retrieved_at"])
+                if row["last_retrieved_at"]
+                else None
+            ),
             staleness_status=MetaMemoryStalenessStatus(
                 row["staleness_status"]
             ),
-            last_assessed_at=row["last_assessed_at"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
+            last_assessed_at=(
+                datetime.fromisoformat(row["last_assessed_at"])
+                if row["last_assessed_at"]
+                else None
+            ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
         )
