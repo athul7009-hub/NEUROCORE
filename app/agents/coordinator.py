@@ -42,8 +42,11 @@ from app.memory.working_context_builder import (
     WorkingMemoryContextBuilder,
 )
 from app.memory.working_manager import WorkingMemoryManager
-
-
+from app.memory.meta_maintenance import MetaMemoryMaintenanceManager
+from app.memory.meta_maintenance_schemas import (
+    MetaMemoryMaintenanceReport,
+)
+from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
@@ -73,7 +76,11 @@ class Coordinator:
         self.working_memory_manager = working_memory_manager
         self.prospective_memory_manager = prospective_memory_manager
         self.meta_memory_manager = meta_memory_manager
-
+        self.meta_memory_maintenance_manager = (
+            MetaMemoryMaintenanceManager(meta_memory_manager)
+            if meta_memory_manager is not None
+            else None
+        )
         self.memory_context_builder = (
             MemoryContextBuilder(memory_manager)
             if memory_manager is not None
@@ -238,6 +245,41 @@ class Coordinator:
             request,
             requesting_agent="CoordinatorAgent",
         )
+    def maintain_meta_memory(
+        self,
+        batch_size: int = MetaMemoryMaintenanceManager.DEFAULT_BATCH_SIZE,
+        now: datetime | None = None,
+        ) -> MetaMemoryMaintenanceReport:
+        """Runs bounded meta-memory maintenance through coordinator authorization."""
+
+        if self.meta_memory_maintenance_manager is None:
+            raise RuntimeError(
+                "Meta-memory manager is not initialized."
+            )
+
+        logger.info("Meta-memory maintenance requested.")
+
+        try:
+            report = self.meta_memory_maintenance_manager.maintain(
+                requesting_agent="CoordinatorAgent",
+                batch_size=batch_size,
+                now=now,
+            )
+
+            logger.info(
+                "Meta-memory maintenance completed: "
+                "%d examined, %d assessed, %d skipped, %d failed.",
+                report.total_examined,
+                report.assessed,
+                report.skipped,
+                report.failed,
+            )
+
+            return report
+
+        except Exception:
+            logger.exception("Meta-memory maintenance failed.")
+            raise
     def handle_task(self, task: TaskRequest) -> AgentMessage:
         """Routes, executes, verifies, and records an agent task."""
 

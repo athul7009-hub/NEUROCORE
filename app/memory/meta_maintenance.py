@@ -15,9 +15,6 @@ class MetaMemoryMaintenanceManager:
     MAX_RECORDS_PER_RUN = 100
 
     def __init__(self, meta_manager: MetaMemoryManager) -> None:
-        if not isinstance(meta_manager, MetaMemoryManager):
-            raise TypeError("Expected a MetaMemoryManager.")
-
         self.meta_manager = meta_manager
 
     def maintain(
