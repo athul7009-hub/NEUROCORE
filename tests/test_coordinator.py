@@ -1,10 +1,12 @@
 
 import json
+import sqlite3
+import warnings
 from unittest.mock import patch
 from uuid import uuid4
-import sqlite3
+
 import pytest
-from app.llm.schemas import ReasoningResponse
+
 from app.agents.base_agent import BaseAgent
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
@@ -19,6 +21,9 @@ from app.core.schemas import (
     TaskIntent,
     TaskRequest,
 )
+from app.llm.schemas import ReasoningResponse
+
+
 class MockReasoningService:
     def generate(self, request):
         return ReasoningResponse(
@@ -34,10 +39,14 @@ class MockReasoningService:
             ],
             confidence=0.9,
         )
+
+
 def create_planning_agent():
     return PlanningAgent(
         reasoning_service=MockReasoningService()
     )
+
+
 def create_test_authenticator():
     return AgentAuthenticator({
         "Coordinator": "d" * 64,
@@ -509,6 +518,7 @@ def test_coordinator_rejects_additional_memory_authorization_failures(
 
     process_mock.assert_not_called()
 
+
 @pytest.mark.parametrize(
     "builder_name",
     [
@@ -598,9 +608,7 @@ def test_coordinator_continues_after_additional_memory_database_failure(
     with patch.object(
         builder,
         "build_context",
-        side_effect=sqlite3.OperationalError(
-            "Database unavailable."
-        ),
+        side_effect=sqlite3.OperationalError("Database unavailable."),
     ):
         with patch.object(
             agent,
@@ -614,6 +622,7 @@ def test_coordinator_continues_after_additional_memory_database_failure(
 
     process_mock.assert_called_once()
     assert process_mock.call_args.args[0].memory_context is not None
+
 
 def test_coordinator_continues_when_memory_database_is_unavailable(tmp_path):
     registry = AgentRegistry()
@@ -770,6 +779,7 @@ def test_coordinator_handles_unexpected_verification_agent_exception():
     assert "unexpected internal error" in error_message
     assert "internal verification failure" not in error_message
 
+
 def test_coordinator_rejects_unauthenticated_verification_response():
     registry = AgentRegistry()
     registry.register(create_planning_agent())
@@ -821,44 +831,72 @@ def test_coordinator_rejects_unauthenticated_verification_response():
             "invalid verification report",
         ),
         (
-            {"valid": "yes", "source_agent": "PlanningAgent",
-             "task_id": "wrong-task-id", "errors": []},
+            {
+                "valid": "yes",
+                "source_agent": "PlanningAgent",
+                "task_id": "wrong-task-id",
+                "errors": [],
+            },
             MessageType.RESULT,
             "invalid status",
         ),
         (
-            {"valid": False, "source_agent": "PlanningAgent",
-             "task_id": "wrong-task-id", "errors": []},
+            {
+                "valid": False,
+                "source_agent": "PlanningAgent",
+                "task_id": "wrong-task-id",
+                "errors": [],
+            },
             MessageType.RESULT,
             "failed verification",
         ),
         (
-            {"valid": True, "source_agent": "FileAnalysisAgent",
-             "task_id": "wrong-task-id", "errors": []},
+            {
+                "valid": True,
+                "source_agent": "FileAnalysisAgent",
+                "task_id": "wrong-task-id",
+                "errors": [],
+            },
             MessageType.RESULT,
             "source mismatch",
         ),
         (
-            {"valid": True, "source_agent": "PlanningAgent",
-             "task_id": "wrong-task-id", "errors": []},
+            {
+                "valid": True,
+                "source_agent": "PlanningAgent",
+                "task_id": "wrong-task-id",
+                "errors": [],
+            },
             MessageType.RESULT,
             "task id mismatch",
         ),
         (
-            {"valid": True, "source_agent": "PlanningAgent",
-             "task_id": "wrong-task-id", "errors": ["Invalid plan"]},
+            {
+                "valid": True,
+                "source_agent": "PlanningAgent",
+                "task_id": "wrong-task-id",
+                "errors": ["Invalid plan"],
+            },
             MessageType.RESULT,
             "contains errors",
         ),
         (
-            {"valid": True, "source_agent": "PlanningAgent",
-             "task_id": "wrong-task-id", "errors": "none"},
+            {
+                "valid": True,
+                "source_agent": "PlanningAgent",
+                "task_id": "wrong-task-id",
+                "errors": "none",
+            },
             MessageType.RESULT,
             "contains errors",
         ),
         (
-            {"valid": True, "source_agent": "PlanningAgent",
-             "task_id": "wrong-task-id", "errors": []},
+            {
+                "valid": True,
+                "source_agent": "PlanningAgent",
+                "task_id": "wrong-task-id",
+                "errors": [],
+            },
             MessageType.ERROR,
             "valid result",
         ),
@@ -897,22 +935,39 @@ def test_coordinator_rejects_invalid_verification_reports(
             in_reply_to=message.message_id,
         )
 
-        test_payload = dict(payload) if isinstance(payload, dict) else payload
+        test_payload = (
+            dict(payload) if isinstance(payload, dict) else payload
+        )
 
-        if isinstance(test_payload, dict) and expected_error != "task id mismatch":
+        if (
+            isinstance(test_payload, dict)
+            and expected_error != "task id mismatch"
+        ):
             test_payload["task_id"] = str(message.task_id)
 
-        return response.model_copy(
-            update={
+        return AgentMessage.model_construct(
+            **{
+                **response.model_dump(),
                 "payload": test_payload,
                 "message_type": message_type,
             }
         )
 
+    def return_authenticated_invalid_response(message):
+        invalid_response = return_invalid_response(message)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+
+            return coordinator.authenticator.sign(
+                invalid_response,
+                expected_sender="VerificationAgent",
+            )
+
     with patch.object(
         verification_agent,
-        "process",
-        side_effect=return_invalid_response,
+        "process_authenticated",
+        side_effect=return_authenticated_invalid_response,
     ):
         response = coordinator.handle_task(task)
 
@@ -920,6 +975,8 @@ def test_coordinator_rejects_invalid_verification_reports(
     assert response.message_type == MessageType.ERROR
     assert response.signature is None
     assert expected_error in response.payload["error"].lower()
+
+
 def test_coordinator_does_not_execute_agent_when_accepted_audit_fails():
     registry = AgentRegistry()
     agent = FileAnalysisAgent()

@@ -69,6 +69,102 @@ def test_archive_preserves_original_memory(repository):
     assert archived.archived_at is not None
 
 
+def test_archive_supports_legacy_timezone_timestamps(repository):
+    record = create_record().model_copy(
+        update={
+            "completed_at": datetime(
+                2026,
+                7,
+                13,
+                10,
+                0,
+                tzinfo=timezone(timedelta(hours=5, minutes=30)),
+            )
+        }
+    )
+    repository.save(record)
+
+    # Simulate a timestamp stored by an older version.
+    with repository.database.connection() as connection:
+        connection.execute(
+            """
+            UPDATE episodic_memory
+            SET completed_at = ?
+            WHERE task_id = ?
+            """,
+            (
+                record.completed_at.isoformat(),
+                str(record.task_id),
+            ),
+        )
+
+    stored_record = repository.get(record.task_id)
+
+    assert stored_record is not None
+    assert repository.archive(
+        record.task_id,
+        expected_record=stored_record,
+    ) is True
+
+    archived = repository.get(
+        record.task_id,
+        include_archived=True,
+    )
+
+    assert archived is not None
+    assert archived.lifecycle_status == MemoryLifecycleStatus.ARCHIVED
+
+
+def test_archive_rejects_microsecond_timestamp_change(repository):
+    record = create_record()
+    repository.save(record)
+
+    stored_record = repository.get(record.task_id)
+    assert stored_record is not None
+
+    changed_record = stored_record.model_copy(
+        update={
+            "completed_at": stored_record.completed_at
+            + timedelta(microseconds=1)
+        }
+    )
+
+    assert repository.archive(
+        record.task_id,
+        expected_record=changed_record,
+    ) is False
+
+    unchanged = repository.get(record.task_id)
+
+    assert unchanged is not None
+    assert unchanged.lifecycle_status == MemoryLifecycleStatus.ACTIVE
+
+
+def test_archive_rejects_microsecond_last_used_change(repository):
+    record = create_record().model_copy(
+        update={
+            "last_used_at": datetime.now(timezone.utc),
+            "use_count": 1,
+        }
+    )
+    repository.save(record)
+
+    stored_record = repository.get(record.task_id)
+    assert stored_record is not None
+
+    changed_record = stored_record.model_copy(
+        update={
+            "last_used_at": stored_record.last_used_at
+            + timedelta(microseconds=1)
+        }
+    )
+
+    assert repository.archive(
+        record.task_id,
+        expected_record=changed_record,
+    ) is False
+
+
 def test_archive_missing_memory_returns_false(repository):
     record = create_record()
 

@@ -27,7 +27,13 @@ class MetaMemoryAssessmentEngine:
         if not isinstance(record, MetaMemoryRecord):
             raise TypeError("Expected a MetaMemoryRecord.")
 
-        assessed_at = now or datetime.now(timezone.utc)
+        if now is not None and not isinstance(now, datetime):
+            raise TypeError("now must be a datetime.")
+
+        assessed_at = (
+            now if now is not None
+            else datetime.now(timezone.utc)
+        )
 
         if (
             assessed_at.tzinfo is None
@@ -35,12 +41,18 @@ class MetaMemoryAssessmentEngine:
         ):
             raise ValueError("Assessment timestamp must be timezone-aware.")
 
-        last_activity = record.last_retrieved_at or record.created_at
+        if assessed_at > datetime.now(timezone.utc):
+            raise ValueError("Assessment timestamp cannot be in the future.")
 
-        age = max(
-            timedelta(0),
-            assessed_at - last_activity,
-        )
+        for timestamp in (
+            record.created_at,
+            record.last_retrieved_at,
+        ):
+            if timestamp is not None and timestamp > assessed_at:
+                raise ValueError("Memory activity cannot be in the future.")
+
+        last_activity = record.last_retrieved_at or record.created_at
+        age = assessed_at - last_activity
 
         stale = age >= timedelta(days=self.STALE_AFTER_DAYS)
 

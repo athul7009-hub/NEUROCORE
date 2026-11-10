@@ -173,17 +173,30 @@ def test_uses_creation_time_when_never_retrieved(engine, now):
         == MetaMemoryStalenessStatus.REVIEW_RECOMMENDED
     )
 
-
-def test_future_activity_does_not_produce_negative_age(engine, now):
+def test_rejects_future_activity(engine, now):
     record = create_record(
         last_retrieved_at=now + timedelta(days=10)
     )
 
-    assessment = engine.assess(record, now=now)
+    with pytest.raises(ValueError, match="future"):
+        engine.assess(record, now=now)
+def test_rejects_future_creation_time(engine, now):
+    future_created_at = now + timedelta(days=10)
 
-    assert assessment.quality_score == 0.75
-    assert assessment.staleness_status == MetaMemoryStalenessStatus.CURRENT
+    record = create_record(
+        created_at=future_created_at,
+        updated_at=future_created_at,
+    )
 
+    with pytest.raises(ValueError, match="future"):
+        engine.assess(record, now=now)
+
+
+def test_rejects_future_assessment_timestamp(engine):
+    future_now = datetime.now(timezone.utc) + timedelta(days=1)
+
+    with pytest.raises(ValueError, match="future"):
+        engine.assess(create_record(), now=future_now)
 
 def test_rejects_invalid_record(engine):
     with pytest.raises(TypeError):

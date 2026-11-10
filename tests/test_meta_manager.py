@@ -96,7 +96,34 @@ def test_get_for_memory_retrieves_correct_metadata(manager, record):
     )
 
     assert result == record
+def test_get_for_working_memory_requires_matching_task_id(manager):
+    task_id = uuid4()
 
+    record = MetaMemoryRecord(
+        memory_type=MetaMemoryType.WORKING,
+        memory_id="working-memory-001",
+        task_id=task_id,
+    )
+
+    manager.remember(record, requesting_agent="CoordinatorAgent")
+
+    result = manager.get_for_memory(
+        MetaMemoryType.WORKING,
+        "working-memory-001",
+        requesting_agent="PlanningAgent",
+        task_id=task_id,
+    )
+
+    assert result == record
+
+    mismatched_result = manager.get_for_memory(
+        MetaMemoryType.WORKING,
+        "working-memory-001",
+        requesting_agent="PlanningAgent",
+        task_id=uuid4(),
+    )
+
+    assert mismatched_result is None
 
 def test_search_returns_metadata(manager):
     for index in range(3):
@@ -331,7 +358,7 @@ def test_assess_returns_none_for_missing_record(manager):
 
 def test_assess_uses_supplied_timestamp(manager, record):
     manager.remember(record, requesting_agent="CoordinatorAgent")
-    assessed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assessed_at = datetime.now(timezone.utc)
 
     assessment = manager.assess(
         record.meta_id,
@@ -430,7 +457,7 @@ def test_complete_assessment_workflow(manager, record):
         )
 
     # 3. Generate an advisory assessment.
-    assessed_at = datetime(2026, 11, 8, tzinfo=timezone.utc)
+    assessed_at = datetime.now(timezone.utc)
 
     assessment = manager.assess(
         record.meta_id,

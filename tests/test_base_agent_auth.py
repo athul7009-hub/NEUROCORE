@@ -91,3 +91,47 @@ def test_replayed_request_is_rejected():
 
     with pytest.raises(PermissionError):
         agent.process_authenticated(request)
+@pytest.mark.parametrize("invalid_message", [None, "invalid", {}, 123])
+def test_invalid_message_type_is_rejected(invalid_message):
+    agent = AuthTestAgent()
+    agent.set_authenticator(create_authenticator())
+
+    with pytest.raises(
+        TypeError,
+        match="Only AgentMessage instances can be processed",
+    ):
+        agent.process_authenticated(invalid_message)
+class InvalidResponseAgent(BaseAgent):
+    def __init__(self, response):
+        super().__init__("TestAgent", "Invalid response test agent")
+        self.response = response
+
+    def process(self, message: AgentMessage):
+        return self.response
+@pytest.mark.parametrize("invalid_response", [None, "invalid", {}, 123])
+def test_agent_rejects_invalid_response_type(invalid_response):
+    authenticator = create_authenticator()
+    agent = InvalidResponseAgent(invalid_response)
+    agent.set_authenticator(authenticator)
+
+    request = create_request(authenticator)
+
+    with pytest.raises(TypeError, match="Only AgentMessage instances can be signed"):
+        agent.process_authenticated(request)
+def test_agent_rejects_response_with_wrong_sender():
+    authenticator = create_authenticator()
+    agent = InvalidResponseAgent(
+        AgentMessage(
+            task_id="12345678-1234-5678-1234-567812345678",
+            sender="Coordinator",
+            recipient="Coordinator",
+            message_type=MessageType.RESULT,
+            payload={"result": "invalid"},
+        )
+    )
+    agent.set_authenticator(authenticator)
+
+    request = create_request(authenticator)
+
+    with pytest.raises(ValueError, match="identity does not match"):
+        agent.process_authenticated(request)

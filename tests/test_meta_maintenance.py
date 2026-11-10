@@ -29,13 +29,21 @@ def maintenance(manager):
     return MetaMemoryMaintenanceManager(manager)
 
 
-def store_records(manager, count):
+def store_records(manager, count, *, created_at=None):
     records = []
 
     for index in range(count):
         record = MetaMemoryRecord(
             memory_type=MetaMemoryType.EPISODIC,
             memory_id=f"memory-{index}",
+            **(
+                {
+                    "created_at": created_at,
+                    "updated_at": created_at,
+                }
+                if created_at is not None
+                else {}
+            ),
         )
         manager.remember(
             record,
@@ -86,8 +94,14 @@ def test_skips_recently_assessed_records(manager, maintenance):
 
 
 def test_reassesses_old_assessments(manager, maintenance):
-    records = store_records(manager, 2)
     old_time = datetime.now(timezone.utc) - timedelta(days=100)
+    creation_time = old_time - timedelta(days=200)
+
+    records = store_records(
+        manager,
+        2,
+        created_at=creation_time,
+    )
 
     for record in records:
         manager.repository.update_assessment(

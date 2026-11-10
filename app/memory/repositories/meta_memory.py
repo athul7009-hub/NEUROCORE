@@ -203,7 +203,7 @@ class MetaMemoryRepository:
                 SELECT *
                 FROM meta_memories
                 {where_clause}
-                ORDER BY created_at DESC
+                ORDER BY julianday(created_at) DESC, rowid DESC
                 LIMIT ? OFFSET ?
                 """,
                 (*parameters, limit, offset),
@@ -250,8 +250,6 @@ class MetaMemoryRepository:
 
         return cursor.rowcount > 0
 
-
-
     def update_assessment(
         self,
         meta_id: UUID,
@@ -263,7 +261,6 @@ class MetaMemoryRepository:
         expected_usage_count: int,
     ) -> bool:
         """Persist assessment only if usage has not changed."""
-
         if not isinstance(meta_id, UUID):
             raise TypeError("meta_id must be a UUID")
 
@@ -372,36 +369,74 @@ class MetaMemoryRepository:
         updated_value = now.isoformat()
 
         with self.database.connection() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE meta_memories
-                SET
-                    usage_count = usage_count + 1,
-                    last_retrieved_at = CASE
-                        WHEN last_retrieved_at IS NULL
-                             OR last_retrieved_at < ?
-                        THEN ?
-                        ELSE last_retrieved_at
-                    END,
-                    quality_score = NULL,
-                    assessment_confidence = NULL,
-                    staleness_status = ?,
-                    last_assessed_at = NULL,
-                    updated_at = ?
-                WHERE memory_type = ?
-                  AND memory_id = ?
-                """,
-                (
-                    retrieved_value,
-                    retrieved_value,
-                    MetaMemoryStalenessStatus.UNKNOWN.value,
-                    updated_value,
-                    memory_type.value,
-                    memory_id,
-                ),
-            )
+            # Retry if another operation changes the timestamp between
+            # reading it and updating the record.
+            for _ in range(5):
+                current = connection.execute(
+                    """
+                    SELECT last_retrieved_at
+                    FROM meta_memories
+                    WHERE memory_type = ?
+                      AND memory_id = ?
+                    """,
+                    (memory_type.value, memory_id),
+                ).fetchone()
 
-        return cursor.rowcount > 0
+                if current is None:
+                    return False
+
+                stored_value = current["last_retrieved_at"]
+
+                if stored_value is None:
+                    next_value = retrieved_value
+                else:
+                    stored_timestamp = datetime.fromisoformat(stored_value)
+
+                    if (
+                        stored_timestamp.tzinfo is None
+                        or stored_timestamp.utcoffset() is None
+                    ):
+                        raise ValueError(
+                            "Stored retrieval timestamp must be timezone-aware."
+                        )
+
+                    if (
+                        stored_timestamp.astimezone(timezone.utc)
+                        < retrieved_timestamp
+                    ):
+                        next_value = retrieved_value
+                    else:
+                        next_value = stored_value
+
+                cursor = connection.execute(
+                    """
+                    UPDATE meta_memories
+                    SET
+                        usage_count = usage_count + 1,
+                        last_retrieved_at = ?,
+                        quality_score = NULL,
+                        assessment_confidence = NULL,
+                        staleness_status = ?,
+                        last_assessed_at = NULL,
+                        updated_at = ?
+                    WHERE memory_type = ?
+                      AND memory_id = ?
+                      AND last_retrieved_at IS ?
+                    """,
+                    (
+                        next_value,
+                        MetaMemoryStalenessStatus.UNKNOWN.value,
+                        updated_value,
+                        memory_type.value,
+                        memory_id,
+                        stored_value,
+                    ),
+                )
+
+                if cursor.rowcount == 1:
+                    return True
+
+        return False
 
 
     @staticmethod

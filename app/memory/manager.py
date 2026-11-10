@@ -52,7 +52,7 @@ class MemoryManager:
             raise PermissionError(
                 "Only the coordinator can manage memory lifecycle operations."
             )
-    
+
     def inspect_identity(
         self,
         task_id: UUID,
@@ -177,10 +177,10 @@ class MemoryManager:
         if not isinstance(task_ids, list):
             raise TypeError("Task IDs must be provided as a list.")
 
-        for task_id in set(task_ids):
-            if not isinstance(task_id, UUID):
-                raise TypeError("Every task ID must be a UUID.")
+        if any(not isinstance(task_id, UUID) for task_id in task_ids):
+            raise TypeError("Every task ID must be a UUID.")
 
+        for task_id in set(task_ids):
             record = self.repository.get(task_id)
 
             if (
@@ -266,16 +266,38 @@ class MemoryManager:
 
         self._authorize_requester(requesting_agent)
 
-        records = self.repository.get_archived(
-            limit=limit,
-            intent=intent,
-        )
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("Limit must be an integer.")
 
-        return [
-            record
-            for record in records
-            if self.policy.evaluate_archived_retrieval(
-                record,
-                requesting_agent,
+        if not 1 <= limit <= 100:
+            raise ValueError("Limit must be between 1 and 100.")
+
+        batch_size = 100
+        offset = 0
+        authorized_records = []
+
+        while len(authorized_records) < limit:
+            records = self.repository.get_archived(
+                limit=batch_size,
+                intent=intent,
+                offset=offset,
             )
-        ]
+
+            if not records:
+                break
+
+            authorized_records.extend(
+                record
+                for record in records
+                if self.policy.evaluate_archived_retrieval(
+                    record,
+                    requesting_agent,
+                )
+            )
+
+            offset += len(records)
+
+            if len(records) < batch_size:
+                break
+
+        return authorized_records[:limit]

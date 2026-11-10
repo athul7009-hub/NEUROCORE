@@ -23,7 +23,8 @@ class BaseAgent(ABC):
     ) -> AgentMessage:
         if self._authenticator is None:
             raise RuntimeError("Agent authenticator has not been configured.")
-
+        if not isinstance(message, AgentMessage):
+            raise TypeError("Only AgentMessage instances can be processed.")
         if message.recipient != self.name:
             raise PermissionError("Message recipient does not match this agent.")
 

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
-
+from contextlib import ExitStack
 import pytest
 
 from tests.fakes import create_planning_agent
@@ -46,6 +46,251 @@ from app.memory.procedural_manager import ProceduralMemoryManager
 from app.memory.working_manager import WorkingMemoryManager
 from app.memory.prospective_manager import ProspectiveMemoryManager
 
+
+def test_coordinator_delivers_all_five_memory_contexts_to_planning_agent(
+    memory_manager,
+):
+    from app.memory.context_schemas import (
+        MemoryContext,
+        MemoryContextItem,
+    )
+    from app.memory.semantic_context_schemas import (
+        SemanticMemoryContext,
+        SemanticMemoryContextItem,
+    )
+    from app.memory.semantic_schemas import SemanticMemorySource
+    from app.memory.procedural_context_schemas import (
+        ProceduralMemoryContext,
+        ProceduralMemoryContextItem,
+    )
+    from app.memory.procedural_schemas import (
+        ProceduralMemorySource,
+        ProceduralMemoryStep,
+    )
+    from app.memory.working_schemas import (
+        WorkingMemoryContext,
+        WorkingMemoryContextItem,
+        WorkingMemoryEntryType,
+    )
+    from app.memory.prospective_context_schemas import (
+        ProspectiveMemoryContext,
+        ProspectiveMemoryContextItem,
+    )
+    from app.memory.prospective_schemas import (
+        ProspectiveMemoryPriority,
+        ProspectiveMemoryStatus,
+        ProspectiveTriggerType,
+    )
+
+    database = memory_manager.repository.database
+
+    semantic_manager = SemanticMemoryManager(
+        SemanticMemoryRepository(database)
+    )
+    procedural_manager = ProceduralMemoryManager(
+        ProceduralMemoryRepository(database)
+    )
+    working_manager = WorkingMemoryManager(
+        WorkingMemoryRepository(database)
+    )
+    prospective_manager = ProspectiveMemoryManager(
+        ProspectiveMemoryRepository(database)
+    )
+
+    for manager in (
+        semantic_manager,
+        procedural_manager,
+        working_manager,
+        prospective_manager,
+    ):
+        manager.initialize()
+
+    registry = AgentRegistry()
+    registry.register(create_planning_agent())
+    registry.register(VerificationAgent())
+
+    authenticator = create_authenticator()
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
+
+    meta_manager = Mock()
+    meta_manager.record_usage.return_value = True
+
+    coordinator = Coordinator(
+        registry,
+        authenticator,
+        memory_manager,
+        semantic_memory_manager=semantic_manager,
+        procedural_memory_manager=procedural_manager,
+        working_memory_manager=working_manager,
+        prospective_memory_manager=prospective_manager,
+        meta_memory_manager=meta_manager,
+    )
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    def create_contexts(recipient):
+        now = datetime.now(timezone.utc)
+
+        return {
+            "episodic": MemoryContext(
+                task_id=task.task_id,
+                recipient_agent=recipient,
+                memories=[
+                    MemoryContextItem(
+                        source_task_id=uuid4(),
+                        intent="PLAN_TASK",
+                        status=MemoryStatus.COMPLETED,
+                        agent_name="PlanningAgent",
+                        summary="Previous successful planning task",
+                        completed_at=now,
+                    )
+                ],
+            ),
+            "semantic": SemanticMemoryContext(
+                task_id=task.task_id,
+                recipient_agent=recipient,
+                memories=[
+                    SemanticMemoryContextItem(
+                        memory_id=uuid4(),
+                        subject="NEUROCORE",
+                        predicate="uses",
+                        object="Python",
+                        confidence=0.95,
+                        source=SemanticMemorySource.SYSTEM,
+                        validated_at=now,
+                        validated_by="VerificationAgent",
+                    )
+                ],
+            ),
+            "procedural": ProceduralMemoryContext(
+                task_id=task.task_id,
+                recipient_agent=recipient,
+                memories=[
+                    ProceduralMemoryContextItem(
+                        procedure_id=uuid4(),
+                        name="Project planning",
+                        description="Create a structured project plan",
+                        when_to_use="When planning a software project",
+                        steps=[
+                            ProceduralMemoryStep(
+                                step_number=1,
+                                instruction="Define project requirements",
+                            )
+                        ],
+                        confidence=0.9,
+                        source=ProceduralMemorySource.SYSTEM,
+                    )
+                ],
+            ),
+            "working": WorkingMemoryContext(
+                task_id=task.task_id,
+                recipient_agent=recipient,
+                entries=[
+                    WorkingMemoryContextItem(
+                        entry_id=uuid4(),
+                        key="planning_status",
+                        entry_type=WorkingMemoryEntryType.OBSERVATION,
+                        content={"status": "ready"},
+                        source_agent="PlanningAgent",
+                    )
+                ],
+            ),
+            "prospective": ProspectiveMemoryContext(
+                task_id=task.task_id,
+                recipient_agent=recipient,
+                memories=[
+                    ProspectiveMemoryContextItem(
+                        memory_id=uuid4(),
+                        title="Review project plan",
+                        description="Review the completed project plan",
+                        action="Perform a final review",
+                        trigger_type=ProspectiveTriggerType.MANUAL,
+                        priority=ProspectiveMemoryPriority.NORMAL,
+                        status=ProspectiveMemoryStatus.PENDING,
+                    )
+                ],
+            ),
+        }
+
+    contexts_by_recipient = {
+        "PlanningAgent": create_contexts("PlanningAgent"),
+        "VerificationAgent": create_contexts("VerificationAgent"),
+    }
+
+    builder_contexts = {
+        "memory_context_builder": "episodic",
+        "semantic_context_builder": "semantic",
+        "procedural_context_builder": "procedural",
+        "working_context_builder": "working",
+        "prospective_context_builder": "prospective",
+    }
+
+    builder_patches = [
+        patch.object(
+            getattr(coordinator, builder_name),
+            "build_context",
+            side_effect=lambda *args, _key=context_key, **kwargs:
+                contexts_by_recipient[kwargs["recipient_agent"]][_key],
+        )
+        for builder_name, context_key in builder_contexts.items()
+    ]
+
+
+    with ExitStack() as stack:
+        for builder_patch in builder_patches:
+            stack.enter_context(builder_patch)
+
+        send_spy = stack.enter_context(
+            patch.object(
+                coordinator,
+                "_send_request",
+                wraps=coordinator._send_request,
+            )
+        )
+
+        response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.RESULT
+
+
+
+
+    planning_request = next(
+        call.args[0]
+        for call in send_spy.call_args_list
+        if call.args[0].recipient == "PlanningAgent"
+    )
+
+    planning_contexts = contexts_by_recipient["PlanningAgent"]
+
+    assert planning_request.memory_context is planning_contexts["episodic"]
+    assert planning_request.semantic_context is planning_contexts["semantic"]
+    assert planning_request.procedural_context is planning_contexts["procedural"]
+    assert planning_request.working_memory_context is planning_contexts["working"]
+    assert planning_request.prospective_context is planning_contexts["prospective"]
+
+    planning_usage_calls = [
+        call
+        for call in meta_manager.record_usage.call_args_list
+        if call.kwargs["requesting_agent"] == "PlanningAgent"
+    ]
+
+    assert len(planning_usage_calls) == 5
+
+    assert {
+        call.args[0] for call in planning_usage_calls
+    } == {
+        MetaMemoryType.EPISODIC,
+        MetaMemoryType.SEMANTIC,
+        MetaMemoryType.PROCEDURAL,
+        MetaMemoryType.WORKING,
+        MetaMemoryType.PROSPECTIVE,
+    }
 
 @pytest.fixture
 def memory_manager(tmp_path):

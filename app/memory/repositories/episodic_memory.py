@@ -18,6 +18,14 @@ class EpisodicMemoryRepository:
     def __init__(self, database: SQLiteDatabase):
         self.database = database
 
+    @staticmethod
+    def _utc_isoformat(value: datetime) -> str:
+        """Normalizes a datetime to UTC before persistence."""
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Timestamps must be timezone-aware.")
+
+        return value.astimezone(timezone.utc).isoformat()
+
     def initialize(self) -> None:
         """Creates or safely migrates the episodic memory table."""
 
@@ -124,19 +132,19 @@ class EpisodicMemoryRepository:
                     record.status.value,
                     record.agent_name,
                     record.summary,
-                    record.created_at.isoformat(),
-                    record.completed_at.isoformat(),
+                    self._utc_isoformat(record.created_at),
+                    self._utc_isoformat(record.completed_at),
                     record.sensitivity.value,
                     record.source.value,
                     record.lifecycle_status.value,
                     (
-                        record.archived_at.isoformat()
+                        self._utc_isoformat(record.archived_at)
                         if record.archived_at
                         else None
                     ),
                     record.use_count,
                     (
-                        record.last_used_at.isoformat()
+                        self._utc_isoformat(record.last_used_at)
                         if record.last_used_at
                         else None
                     ),
@@ -165,7 +173,7 @@ class EpisodicMemoryRepository:
             ).fetchone()
 
         return self._to_record(row) if row else None
-    
+
     def get_identity_status(
         self,
         task_id: UUID,
@@ -252,7 +260,7 @@ class EpisodicMemoryRepository:
             query += " WHERE " + " AND ".join(conditions)
 
         query += """
-            ORDER BY completed_at DESC, rowid DESC
+            ORDER BY julianday(completed_at) DESC, rowid DESC
             LIMIT ? OFFSET ?
         """
 
@@ -324,36 +332,61 @@ class EpisodicMemoryRepository:
         if expected_record.task_id != task_id:
             raise ValueError("Task ID does not match the expected record.")
 
-        now = datetime.now(timezone.utc).isoformat()
-
         with self.database.connection() as connection:
+            current = connection.execute(
+                """
+                SELECT completed_at, last_used_at
+                FROM episodic_memory
+                WHERE task_id = ?
+                  AND lifecycle_status = 'active'
+                """,
+                (str(task_id),),
+            ).fetchone()
+
+            if current is None:
+                return False
+
+            stored_completed_at = datetime.fromisoformat(
+                current["completed_at"]
+            )
+
+            if stored_completed_at != expected_record.completed_at:
+                return False
+
+            stored_last_used_at = (
+                datetime.fromisoformat(current["last_used_at"])
+                if current["last_used_at"] is not None
+                else None
+            )
+
+            if stored_last_used_at != expected_record.last_used_at:
+                return False
+
+            now = datetime.now(timezone.utc).isoformat()
+
             cursor = connection.execute(
                 """
                 UPDATE episodic_memory
                 SET lifecycle_status = 'archived',
                     archived_at = ?
                 WHERE task_id = ?
-                AND lifecycle_status = 'active'
-                AND status = ?
-                AND sensitivity = ?
-                AND completed_at = ?
-                AND use_count = ?
-                AND last_used_at IS ?
-                AND usage_tracked = ?
-                AND is_protected = ?
+                  AND lifecycle_status = 'active'
+                  AND status = ?
+                  AND sensitivity = ?
+                  AND completed_at = ?
+                  AND use_count = ?
+                  AND last_used_at IS ?
+                  AND usage_tracked = ?
+                  AND is_protected = ?
                 """,
                 (
                     now,
                     str(task_id),
                     expected_record.status.value,
                     expected_record.sensitivity.value,
-                    expected_record.completed_at.isoformat(),
+                    current["completed_at"],
                     expected_record.use_count,
-                    (
-                        expected_record.last_used_at.isoformat()
-                        if expected_record.last_used_at
-                        else None
-                    ),
+                    current["last_used_at"],
                     int(expected_record.usage_tracked),
                     int(expected_record.is_protected),
                 ),
@@ -384,6 +417,7 @@ class EpisodicMemoryRepository:
         intent: str | None = None,
         status: MemoryStatus | None = None,
         agent_name: str | None = None,
+        offset: int = 0,
     ) -> list[EpisodicMemoryRecord]:
         """Retrieves archived memories for historical inspection."""
 
@@ -392,6 +426,12 @@ class EpisodicMemoryRepository:
 
         if not 1 <= limit <= 100:
             raise ValueError("Limit must be between 1 and 100.")
+
+        if isinstance(offset, bool) or not isinstance(offset, int):
+            raise TypeError("Offset must be an integer.")
+
+        if offset < 0:
+            raise ValueError("Offset cannot be negative.")
 
         if intent is not None:
             if not isinstance(intent, str):
@@ -426,10 +466,10 @@ class EpisodicMemoryRepository:
         query = (
             "SELECT * FROM episodic_memory WHERE "
             + " AND ".join(conditions)
-            + " ORDER BY completed_at DESC, rowid DESC LIMIT ?"
+            + " ORDER BY julianday(completed_at) DESC, rowid DESC LIMIT ? OFFSET ?"
         )
 
-        parameters.append(limit)
+        parameters.extend((limit, offset))
 
         with self.database.connection() as connection:
             rows = connection.execute(

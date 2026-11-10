@@ -138,3 +138,8 @@ def test_sign_rejects_non_agent_messages(invalid_message):
         match="Only AgentMessage instances can be signed",
     ):
         auth.sign(invalid_message, "PlanningAgent")
+@pytest.mark.parametrize("invalid_message", [None, "invalid", {}, 123])
+def test_verify_rejects_non_agent_messages(invalid_message):
+    auth = create_authenticator()
+
+    assert auth.verify(invalid_message) is False

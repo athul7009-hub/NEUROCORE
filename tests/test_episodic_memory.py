@@ -3,7 +3,7 @@ import sqlite3
 from uuid import uuid4
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from app.memory.database import SQLiteDatabase
 from app.memory.repositories.episodic_memory import (
     EpisodicMemoryRepository,
@@ -73,7 +73,73 @@ def test_recent_memories(repository):
 
     assert len(recent) == 2
     assert recent[0].task_id == second.task_id
+def test_recent_memories_order_legacy_timezone_timestamps(repository):
+    older = create_record().model_copy(
+        update={
+            "completed_at": datetime(
+                2026, 11, 10, 10, 0,
+                tzinfo=timezone(timedelta(hours=5, minutes=30)),
+            )
+        }
+    )
+    newer = create_record().model_copy(
+        update={
+            "completed_at": datetime(
+                2026, 11, 10, 5, 0,
+                tzinfo=timezone.utc,
+            )
+        }
+    )
 
+    repository.save(older)
+    repository.save(newer)
+
+    # Simulate timestamps stored by an older version.
+    with repository.database.connection() as connection:
+        connection.execute(
+            "UPDATE episodic_memory SET completed_at = ? WHERE task_id = ?",
+            (older.completed_at.isoformat(), str(older.task_id)),
+        )
+        connection.execute(
+            "UPDATE episodic_memory SET completed_at = ? WHERE task_id = ?",
+            (newer.completed_at.isoformat(), str(newer.task_id)),
+        )
+
+    # Inspect committed legacy timestamp values.
+
+    recent = repository.get_recent(limit=2)
+
+    assert [record.task_id for record in recent] == [
+        newer.task_id,
+        older.task_id,
+    ]
+def test_recent_memories_order_by_actual_utc_time(repository):
+    older = create_record().model_copy(
+        update={
+            "completed_at": datetime(
+                2026, 11, 10, 10, 0,
+                tzinfo=timezone(timedelta(hours=5, minutes=30)),
+            )
+        }
+    )
+    newer = create_record().model_copy(
+        update={
+            "completed_at": datetime(
+                2026, 11, 10, 5, 0,
+                tzinfo=timezone.utc,
+            )
+        }
+    )
+
+    repository.save(older)
+    repository.save(newer)
+
+    recent = repository.get_recent(limit=2)
+
+    assert [record.task_id for record in recent] == [
+        newer.task_id,
+        older.task_id,
+    ]
 
 def test_legacy_database_migration(tmp_path):
     database = SQLiteDatabase(tmp_path / "legacy.db")
@@ -365,6 +431,7 @@ def test_legacy_memory_gets_safe_lifecycle_defaults(tmp_path):
     record = repository.get_recent(limit=1)[0]
 
     assert record.lifecycle_status.value == "active"
+    assert record.last_used_at is None
     assert record.use_count == 0
     assert record.usage_tracked is False
     assert record.is_protected is False

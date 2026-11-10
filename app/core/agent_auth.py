@@ -83,6 +83,9 @@ class AgentAuthenticator:
 
         return unsigned.model_copy(update={"signature": digest})
     def verify(self, message: AgentMessage) -> bool:
+        if not isinstance(message, AgentMessage):
+            return False
+
         key = self._keys.get(message.sender)
 
         if key is None or not message.signature:

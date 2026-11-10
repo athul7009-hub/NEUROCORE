@@ -318,6 +318,24 @@ def test_record_usage_requires_trusted_agent(manager):
             requesting_agent="UnknownAgent",
         )
 
+def test_record_usage_validates_all_ids_before_updating(manager):
+    record = create_record()
+    manager.remember_task(record)
+
+    with pytest.raises(
+        TypeError,
+        match="Every task ID must be a UUID",
+    ):
+        manager.record_usage(
+            [record.task_id, "invalid-id"],
+            requesting_agent="CoordinatorAgent",
+        )
+
+    stored_record = manager.repository.get(record.task_id)
+
+    assert stored_record is not None
+    assert stored_record.use_count == 0
+
 
 # --------------------------------------------------
 # Retention and archival tests

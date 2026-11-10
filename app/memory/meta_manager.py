@@ -50,9 +50,11 @@ class MetaMemoryManager:
             raise PermissionError(
                 "Only the coordinator can manage meta-memory assessments."
             )
+
     def authorize_maintenance(self, requesting_agent: str) -> None:
         """Authorizes an agent to perform meta-memory maintenance."""
         self._authorize_coordinator(requesting_agent)
+
     def remember(
         self,
         record: MetaMemoryRecord,
@@ -60,7 +62,6 @@ class MetaMemoryManager:
         requesting_agent: str,
     ) -> None:
         """Stores metadata about an existing memory."""
-
         self._authorize_coordinator(requesting_agent)
 
         if not isinstance(record, MetaMemoryRecord):
@@ -78,7 +79,6 @@ class MetaMemoryManager:
         requesting_agent: str,
     ) -> MetaMemoryRecord | None:
         """Retrieves authorized metadata by its ID."""
-
         self._authorize_requester(requesting_agent)
 
         if not isinstance(meta_id, UUID):
@@ -103,14 +103,18 @@ class MetaMemoryManager:
         memory_id: str,
         *,
         requesting_agent: str,
+        task_id: UUID | None = None,
     ) -> MetaMemoryRecord | None:
         """Retrieves metadata using the original memory identity."""
-
         self._authorize_requester(requesting_agent)
+
+        if task_id is not None and not isinstance(task_id, UUID):
+            raise TypeError("task_id must be a UUID or None.")
 
         record = self.repository.get_for_memory(
             memory_type,
             memory_id,
+            task_id=task_id,
         )
 
         if record is None:
@@ -134,7 +138,6 @@ class MetaMemoryManager:
         offset: int = 0,
     ) -> list[MetaMemoryRecord]:
         """Searches metadata and applies retrieval authorization."""
-
         self._authorize_requester(requesting_agent)
 
         records = self.repository.search(
@@ -161,7 +164,6 @@ class MetaMemoryManager:
         now: datetime | None = None,
     ) -> MetaMemoryAssessment | None:
         """Returns an advisory assessment without persisting changes."""
-
         self._authorize_coordinator(requesting_agent)
 
         if not isinstance(meta_id, UUID):
@@ -176,6 +178,7 @@ class MetaMemoryManager:
             record,
             now=now,
         )
+
     def assess_and_persist(
         self,
         meta_id: UUID,
@@ -184,7 +187,6 @@ class MetaMemoryManager:
         now: datetime | None = None,
     ) -> MetaMemoryAssessment | None:
         """Assesses metadata and persists the generated assessment."""
-
         self._authorize_coordinator(requesting_agent)
 
         if not isinstance(meta_id, UUID):
@@ -213,7 +215,6 @@ class MetaMemoryManager:
             return None
 
         return assessment
-   
 
     def update_assessment(
         self,
@@ -225,7 +226,6 @@ class MetaMemoryManager:
         staleness_status: MetaMemoryStalenessStatus,
     ) -> bool:
         """Persists assessment without overwriting concurrent usage updates."""
-
         self._authorize_coordinator(requesting_agent)
 
         if not isinstance(meta_id, UUID):
@@ -268,8 +268,6 @@ class MetaMemoryManager:
             expected_usage_count=record.usage_count,
         )
 
-
-
     def record_usage(
         self,
         memory_type: MetaMemoryType,
@@ -279,7 +277,6 @@ class MetaMemoryManager:
         retrieved_at: datetime | None = None,
     ) -> bool:
         """Records a trusted agent's retrieval of an existing memory."""
-
         self._authorize_requester(requesting_agent)
 
         if not self.policy.can_record_usage(requesting_agent):

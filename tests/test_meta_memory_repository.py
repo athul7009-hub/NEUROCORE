@@ -1,5 +1,4 @@
-
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -479,3 +478,87 @@ def test_save_and_get_working_memory_preserves_task_id(repository):
     assert retrieved is not None
     assert retrieved.memory_type == MetaMemoryType.WORKING
     assert retrieved.task_id == task_id
+def test_search_orders_legacy_timezone_timestamps_chronologically(
+    repository,
+):
+    older_time = datetime.now(timezone.utc) - timedelta(minutes=30)
+    newer_time = older_time + timedelta(minutes=15)
+
+    older = MetaMemoryRecord(
+        memory_type=MetaMemoryType.EPISODIC,
+        memory_id=str(uuid4()),
+        created_at=older_time,
+        updated_at=older_time,
+    )
+
+    newer = MetaMemoryRecord(
+        memory_type=MetaMemoryType.SEMANTIC,
+        memory_id=str(uuid4()),
+        created_at=newer_time,
+        updated_at=newer_time,
+    )
+
+    repository.save(older)
+    repository.save(newer)
+
+    with repository.database.connection() as connection:
+        connection.execute(
+            """
+            UPDATE meta_memories
+            SET created_at = ?
+            WHERE meta_id = ?
+            """,
+            (
+                older_time.astimezone(
+                    timezone(timedelta(hours=2))
+                ).isoformat(),
+                str(older.meta_id),
+            ),
+        )
+
+    results = repository.search()
+
+    assert [record.meta_id for record in results] == [
+        newer.meta_id,
+        older.meta_id,
+    ]
+
+
+def test_record_usage_preserves_newer_legacy_timezone_timestamp(
+    repository,
+    valid_record,
+):
+    repository.save(valid_record)
+
+    newer_datetime = datetime.now(timezone.utc) - timedelta(minutes=5)
+    older_datetime = newer_datetime - timedelta(minutes=15)
+
+    newer_timestamp = newer_datetime.astimezone(
+        timezone(timedelta(hours=2))
+    ).isoformat()
+
+    with repository.database.connection() as connection:
+        connection.execute(
+            """
+            UPDATE meta_memories
+            SET last_retrieved_at = ?
+            WHERE meta_id = ?
+            """,
+            (
+                newer_timestamp,
+                str(valid_record.meta_id),
+            ),
+        )
+
+    result = repository.record_usage(
+        valid_record.memory_type,
+        valid_record.memory_id,
+        retrieved_at=older_datetime,
+    )
+
+    assert result is True
+
+    updated = repository.get(valid_record.meta_id)
+
+    assert updated.usage_count == 1
+    assert updated.last_retrieved_at == newer_datetime

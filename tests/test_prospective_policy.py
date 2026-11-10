@@ -121,6 +121,7 @@ def test_retrieval_rejects_completed_memory():
     record = create_record(
         trigger_type=ProspectiveTriggerType.TIME,
         due_at=now,
+        created_at=now,
         status=ProspectiveMemoryStatus.COMPLETED,
         triggered_at=now,
         completed_at=now,

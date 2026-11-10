@@ -145,7 +145,7 @@ class MetaMemoryConflictManager:
             reviewed_at=now,
         )
 
-        return self.repository.update(updated)
+
 
     def confirm(
         self,
