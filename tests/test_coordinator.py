@@ -920,3 +920,60 @@ def test_coordinator_rejects_invalid_verification_reports(
     assert response.message_type == MessageType.ERROR
     assert response.signature is None
     assert expected_error in response.payload["error"].lower()
+def test_coordinator_does_not_execute_agent_when_accepted_audit_fails():
+    registry = AgentRegistry()
+    agent = FileAnalysisAgent()
+    registry.register(agent)
+
+    coordinator = create_coordinator(registry)
+
+    with patch.object(
+        coordinator.communication_audit,
+        "record",
+        side_effect=OSError("Audit storage unavailable"),
+    ):
+        with patch(
+            "app.agents.file_analysis_agent.run_scan"
+        ) as mock_scan:
+            task = TaskRequest(
+                user_input="Analyze my project",
+                intent=TaskIntent.FILE_ANALYSIS,
+                parameters={"directory": "D:/Projects/Demo"},
+            )
+
+            response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.ERROR
+    assert "unexpected internal error" in response.payload["error"].lower()
+    mock_scan.assert_not_called()
+
+
+def test_coordinator_keeps_request_rejected_when_rejection_audit_fails():
+    registry = AgentRegistry()
+    agent = FileAnalysisAgent()
+    registry.register(agent)
+
+    coordinator = create_coordinator(registry)
+
+    coordinator.communication_policy.allowed_fields[
+        "FileAnalysisAgent"
+    ] = {"unauthorized_field"}
+
+    with patch.object(
+        coordinator.communication_audit,
+        "record",
+        side_effect=OSError("Audit storage unavailable"),
+    ):
+        with patch(
+            "app.agents.file_analysis_agent.run_scan"
+        ) as mock_scan:
+            task = TaskRequest(
+                user_input="Analyze my project",
+                intent=TaskIntent.FILE_ANALYSIS,
+                parameters={"directory": "D:/Projects/Demo"},
+            )
+
+            response = coordinator.handle_task(task)
+
+    assert response.message_type == MessageType.ERROR
+    mock_scan.assert_not_called()
