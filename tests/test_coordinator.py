@@ -406,6 +406,215 @@ def test_coordinator_rejects_memory_authorization_failure(tmp_path):
     process_mock.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "builder_name",
+    [
+        "semantic_context_builder",
+        "procedural_context_builder",
+        "working_context_builder",
+        "prospective_context_builder",
+    ],
+)
+def test_coordinator_rejects_additional_memory_authorization_failures(
+    tmp_path,
+    builder_name,
+):
+    from app.memory.database import SQLiteDatabase
+    from app.memory.manager import MemoryManager
+    from app.memory.repositories.episodic_memory import (
+        EpisodicMemoryRepository,
+    )
+    from app.memory.repositories.semantic_memory import (
+        SemanticMemoryRepository,
+    )
+    from app.memory.repositories.procedural_memory import (
+        ProceduralMemoryRepository,
+    )
+    from app.memory.repositories.working_memory import (
+        WorkingMemoryRepository,
+    )
+    from app.memory.repositories.prospective_memory import (
+        ProspectiveMemoryRepository,
+    )
+    from app.memory.semantic_manager import SemanticMemoryManager
+    from app.memory.procedural_manager import ProceduralMemoryManager
+    from app.memory.working_manager import WorkingMemoryManager
+    from app.memory.prospective_manager import ProspectiveMemoryManager
+
+    database = SQLiteDatabase(tmp_path / "memory.db")
+
+    memory_manager = MemoryManager(
+        EpisodicMemoryRepository(database)
+    )
+    semantic_manager = SemanticMemoryManager(
+        SemanticMemoryRepository(database)
+    )
+    procedural_manager = ProceduralMemoryManager(
+        ProceduralMemoryRepository(database)
+    )
+    working_manager = WorkingMemoryManager(
+        WorkingMemoryRepository(database)
+    )
+    prospective_manager = ProspectiveMemoryManager(
+        ProspectiveMemoryRepository(database)
+    )
+
+    memory_manager.initialize()
+    semantic_manager.initialize()
+    procedural_manager.initialize()
+    working_manager.initialize()
+    prospective_manager.initialize()
+
+    registry = AgentRegistry()
+    agent = create_planning_agent()
+    registry.register(agent)
+
+    coordinator = Coordinator(
+        registry,
+        create_test_authenticator(),
+        memory_manager,
+        semantic_memory_manager=semantic_manager,
+        procedural_memory_manager=procedural_manager,
+        working_memory_manager=working_manager,
+        prospective_memory_manager=prospective_manager,
+    )
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(
+            coordinator.authenticator
+        )
+
+    task = TaskRequest(
+        user_input="Create a plan to analyze my project",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    builder = getattr(coordinator, builder_name)
+
+    with patch.object(
+        builder,
+        "build_context",
+        side_effect=PermissionError("Unauthorized memory retrieval."),
+    ):
+        with patch.object(
+            agent,
+            "process",
+            wraps=agent.process,
+        ) as process_mock:
+            response = coordinator.handle_task(task)
+
+    assert response.sender == "Coordinator"
+    assert response.message_type == MessageType.ERROR
+    assert "unauthorized" in response.payload["error"].lower()
+
+    process_mock.assert_not_called()
+
+@pytest.mark.parametrize(
+    "builder_name",
+    [
+        "semantic_context_builder",
+        "procedural_context_builder",
+        "working_context_builder",
+        "prospective_context_builder",
+    ],
+)
+def test_coordinator_continues_after_additional_memory_database_failure(
+    tmp_path,
+    builder_name,
+):
+    from app.memory.database import SQLiteDatabase
+    from app.memory.manager import MemoryManager
+    from app.memory.repositories.episodic_memory import (
+        EpisodicMemoryRepository,
+    )
+    from app.memory.repositories.semantic_memory import (
+        SemanticMemoryRepository,
+    )
+    from app.memory.repositories.procedural_memory import (
+        ProceduralMemoryRepository,
+    )
+    from app.memory.repositories.working_memory import (
+        WorkingMemoryRepository,
+    )
+    from app.memory.repositories.prospective_memory import (
+        ProspectiveMemoryRepository,
+    )
+    from app.memory.semantic_manager import SemanticMemoryManager
+    from app.memory.procedural_manager import ProceduralMemoryManager
+    from app.memory.working_manager import WorkingMemoryManager
+    from app.memory.prospective_manager import ProspectiveMemoryManager
+
+    database = SQLiteDatabase(tmp_path / "memory.db")
+
+    memory_manager = MemoryManager(
+        EpisodicMemoryRepository(database)
+    )
+    semantic_manager = SemanticMemoryManager(
+        SemanticMemoryRepository(database)
+    )
+    procedural_manager = ProceduralMemoryManager(
+        ProceduralMemoryRepository(database)
+    )
+    working_manager = WorkingMemoryManager(
+        WorkingMemoryRepository(database)
+    )
+    prospective_manager = ProspectiveMemoryManager(
+        ProspectiveMemoryRepository(database)
+    )
+
+    memory_manager.initialize()
+    semantic_manager.initialize()
+    procedural_manager.initialize()
+    working_manager.initialize()
+    prospective_manager.initialize()
+
+    registry = AgentRegistry()
+    agent = create_planning_agent()
+    registry.register(agent)
+    registry.register(VerificationAgent())
+
+    coordinator = Coordinator(
+        registry,
+        create_test_authenticator(),
+        memory_manager,
+        semantic_memory_manager=semantic_manager,
+        procedural_memory_manager=procedural_manager,
+        working_memory_manager=working_manager,
+        prospective_memory_manager=prospective_manager,
+    )
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(
+            coordinator.authenticator
+        )
+
+    task = TaskRequest(
+        user_input="Create a plan to analyze my project",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    builder = getattr(coordinator, builder_name)
+
+    with patch.object(
+        builder,
+        "build_context",
+        side_effect=sqlite3.OperationalError(
+            "Database unavailable."
+        ),
+    ):
+        with patch.object(
+            agent,
+            "process",
+            wraps=agent.process,
+        ) as process_mock:
+            response = coordinator.handle_task(task)
+
+    assert response.sender == "PlanningAgent"
+    assert response.message_type == MessageType.RESULT
+
+    process_mock.assert_called_once()
+    assert process_mock.call_args.args[0].memory_context is not None
+
 def test_coordinator_continues_when_memory_database_is_unavailable(tmp_path):
     registry = AgentRegistry()
     agent = create_planning_agent()
