@@ -1,6 +1,7 @@
-
 from datetime import timedelta, timezone, datetime
 from uuid import uuid4
+
+import pytest
 
 from app.core.agent_auth import AgentAuthenticator
 from app.core.schemas import AgentMessage, MessageType
@@ -128,3 +129,12 @@ def test_all_registered_agent_keys_are_loaded():
         "FileAnalysisAgent",
         "VerificationAgent",
     }
+@pytest.mark.parametrize("invalid_message", [None, "invalid", {}, 123])
+def test_sign_rejects_non_agent_messages(invalid_message):
+    auth = create_authenticator()
+
+    with pytest.raises(
+        TypeError,
+        match="Only AgentMessage instances can be signed",
+    ):
+        auth.sign(invalid_message, "PlanningAgent")

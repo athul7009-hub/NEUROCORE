@@ -59,12 +59,14 @@ class AgentAuthenticator:
             separators=(",", ":"),
             ensure_ascii=False,
         ).encode("utf-8")
-
     def sign(
         self,
         message: AgentMessage,
         expected_sender: str,
     ) -> AgentMessage:
+        if not isinstance(message, AgentMessage):
+            raise TypeError("Only AgentMessage instances can be signed.")
+
         if message.sender != expected_sender:
             raise ValueError("Agent identity does not match the sender.")
 
@@ -80,7 +82,6 @@ class AgentAuthenticator:
         ).hexdigest()
 
         return unsigned.model_copy(update={"signature": digest})
-
     def verify(self, message: AgentMessage) -> bool:
         key = self._keys.get(message.sender)
 
