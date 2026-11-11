@@ -7,7 +7,7 @@ import pytest
 from app.core.communication_audit import CommunicationAudit
 from app.core.schemas import AgentMessage, MessageType
 
-
+from pathlib import Path
 @pytest.fixture
 def audit(tmp_path):
     log_path = tmp_path / "communication_audit.jsonl"
@@ -56,7 +56,9 @@ def test_records_rejected_communication(audit):
     record = read_records(log_path)[0]
 
     assert record["outcome"] == "rejected"
-    assert record["reason"] == "Unauthorized field"
+    assert record["reason"] == (
+        "Communication policy validation failed."
+    )
 
 
 def test_records_field_names_without_payload_values(audit):
@@ -119,3 +121,44 @@ def test_multiple_events_are_appended(audit):
     assert len(records) == 2
     assert records[0]["outcome"] == "accepted"
     assert records[1]["outcome"] == "rejected"
+def test_rejection_reason_does_not_contain_sensitive_values(audit):
+    logger, log_path = audit
+
+    secret = "private-sensitive-value"
+
+    logger.record(
+        create_message(),
+        "rejected",
+        "Communication policy validation failed.",
+    )
+
+    log_contents = log_path.read_text(encoding="utf-8")
+
+    assert secret not in log_contents
+    assert "Communication policy validation failed." in log_contents
+def test_rejection_reason_is_sanitized(audit):
+    logger, log_path = audit
+    secret = "private-sensitive-value"
+
+    logger.record(
+        create_message(),
+        "rejected",
+        secret,
+    )
+
+    record = read_records(log_path)[0]
+
+    assert record["reason"] == (
+        "Communication policy validation failed."
+    )
+    assert secret not in log_path.read_text(encoding="utf-8")
+def test_file_write_failure_propagates(audit, monkeypatch):
+    logger, log_path = audit
+
+    def fail_open(*args, **kwargs):
+        raise OSError("Disk write failed")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+
+    with pytest.raises(OSError, match="Disk write failed"):
+        logger.record(create_message(), "accepted")

@@ -19,8 +19,12 @@ class CommunicationPolicy:
     )
 
     def __init__(self, max_payload_bytes: int = 64 * 1024):
-        if max_payload_bytes <= 0:
-            raise ValueError("Payload limit must be positive.")
+        if (
+            not isinstance(max_payload_bytes, int)
+            or isinstance(max_payload_bytes, bool)
+            or max_payload_bytes <= 0
+        ):
+            raise ValueError("Payload limit must be a positive integer.")
 
         self.max_payload_bytes = max_payload_bytes
 

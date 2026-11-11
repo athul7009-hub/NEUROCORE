@@ -11,11 +11,13 @@ from app.memory.schemas import (
     EpisodicMemoryRecord,
     MemoryStatus,
 )
-
+from app.memory.memory_policy import MemoryPolicy
 
 @pytest.fixture
 def memory_manager():
-    return Mock(spec=MemoryManager)
+    manager = Mock(spec=MemoryManager)
+    manager.policy = MemoryPolicy()
+    return manager
 
 
 @pytest.fixture
@@ -190,7 +192,11 @@ def test_build_context_rejects_invalid_recipient(
     current_task_id,
     recipient,
 ):
-    with pytest.raises(ValueError):
+    expected_exception = (
+        TypeError if not isinstance(recipient, str) else ValueError
+    )
+
+    with pytest.raises(expected_exception):
         builder.build_context(
             task_id=current_task_id,
             intent="PLAN_TASK",

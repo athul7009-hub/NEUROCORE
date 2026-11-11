@@ -16,7 +16,7 @@ def test_root_symlink_is_rejected(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("Symbolic-link creation is unavailable.")
 
-    with pytest.raises(ValueError, match="Symbolic-link"):
+    with pytest.raises(ValueError, match="Reparse-point"):
         scan_directory(str(link))
 
 
@@ -25,18 +25,20 @@ def test_nested_symlink_is_skipped(tmp_path):
     target.mkdir()
     (target / "secret.txt").write_text("NEUROCORE")
 
-    link = tmp_path / "linked_folder"
+    root = tmp_path / "scan_root"
+    root.mkdir()
+
+    link = root / "linked_folder"
 
     try:
         link.symlink_to(target, target_is_directory=True)
     except (OSError, NotImplementedError):
         pytest.skip("Symbolic-link creation is unavailable.")
 
-    files, warnings = scan_directory(str(tmp_path))
+    files, warnings = scan_directory(str(root))
 
     assert files == []
     assert warnings == []
-
 
 def test_excluded_directory_is_skipped(tmp_path):
     protected = tmp_path / "Windows"

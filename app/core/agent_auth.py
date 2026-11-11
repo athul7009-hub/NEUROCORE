@@ -14,6 +14,12 @@ class AgentAuthenticator:
         agent_keys: dict[str, str],
         max_age_seconds: int = 300,
     ):
+        if (
+            not isinstance(max_age_seconds, int)
+            or isinstance(max_age_seconds, bool)
+            or max_age_seconds <= 0
+        ):
+            raise ValueError("Maximum message age must be a positive integer.")
         self._keys = {}
 
         for name, key in agent_keys.items():
@@ -44,7 +50,7 @@ class AgentAuthenticator:
             raise ValueError("Agent keys must contain at least 32 bytes.")
 
         self.max_age = timedelta(seconds=max_age_seconds)
-        self._seen_messages: set[str] = set()
+        self._seen_messages: dict[str, datetime] = {}
         self._lock = Lock()
 
     @staticmethod
@@ -112,13 +118,22 @@ class AgentAuthenticator:
 
         if not hmac.compare_digest(expected, message.signature):
             return False
-
         message_id = str(message.message_id)
+        expires_at = timestamp + self.max_age
 
         with self._lock:
+            expired_ids = [
+                cached_id
+                for cached_id, expiry in self._seen_messages.items()
+                if expiry < now
+            ]
+
+            for cached_id in expired_ids:
+                del self._seen_messages[cached_id]
+
             if message_id in self._seen_messages:
                 return False
 
-            self._seen_messages.add(message_id)
+            self._seen_messages[message_id] = expires_at
 
         return True

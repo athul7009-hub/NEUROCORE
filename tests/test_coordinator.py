@@ -320,7 +320,9 @@ def test_coordinator_audits_rejected_communication(tmp_path):
 
     assert record["outcome"] == "rejected"
     assert record["recipient"] == "FileAnalysisAgent"
-    assert "Unauthorized payload fields" in record["reason"]
+    assert record["reason"] == (
+        "Communication policy validation failed."
+    )
 
 
 def test_coordinator_audit_does_not_store_payload_values(tmp_path):

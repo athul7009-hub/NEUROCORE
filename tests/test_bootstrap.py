@@ -15,6 +15,10 @@ from app.memory.schemas import (
     MemoryStatus,
 )
 from uuid import uuid4
+from pathlib import Path
+
+from app.core.schemas import MessageType, TaskIntent, TaskRequest
+from app.memory.schemas import MemoryStatus
 def test_create_coordinator_initializes_application():
     coordinator = create_coordinator()
 
@@ -216,3 +220,54 @@ def test_meta_memory_persists_after_coordinator_restart(
     )
 
     assert retrieved == record
+def test_bootstrapped_coordinator_completes_file_analysis_task(
+    tmp_path,
+    monkeypatch,
+):
+    # Isolate application database.
+    monkeypatch.setattr(
+        settings,
+        "database_path",
+        tmp_path / "memory.db",
+    )
+
+    # Prepare a temporary folder with one file.
+    scan_dir = tmp_path / "scan"
+    scan_dir.mkdir()
+    (scan_dir / "example.py").write_text(
+        "print('NEUROCORE')",
+        encoding="utf-8",
+    )
+
+    # Bypass only the profile-path restriction for this isolated test folder.
+    monkeypatch.setattr(
+        settings,
+        "allowed_scan_roots",
+        [scan_dir],
+    )
+
+    # Assemble the real application.
+    coordinator = create_coordinator()
+
+    task = TaskRequest(
+        user_input="Analyze the test folder.",
+        intent=TaskIntent.FILE_ANALYSIS,
+        parameters={"directory": str(scan_dir)},
+    )
+
+    response = coordinator.handle_task(task)
+
+    # Verify the real application workflow.
+    assert response.task_id == task.task_id
+    assert response.sender == "FileAnalysisAgent"
+    assert response.message_type == MessageType.RESULT, response.payload
+
+    # Verify that the completed task was recorded in episodic memory.
+    record = coordinator.memory_manager.get_task(
+        task.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert record is not None
+    assert record.status == MemoryStatus.COMPLETED
+    assert record.agent_name == "FileAnalysisAgent"

@@ -206,7 +206,7 @@ def test_build_context_rejects_invalid_inputs(
     objective,
     recipient,
 ):
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises((TypeError, ValueError, PermissionError)):
         builder.build_context(
             task_id=task_id,
             objective=objective,
@@ -220,4 +220,11 @@ def test_builder_rejects_invalid_limit(manager, limit):
         ProceduralMemoryContextBuilder(
             manager,
             limit=limit,
+        )
+def test_build_context_rejects_unauthorized_recipient(builder):
+    with pytest.raises(PermissionError):
+        builder.build_context(
+            task_id=uuid4(),
+            objective="Set up a Python project",
+            recipient_agent="UnknownAgent",
         )

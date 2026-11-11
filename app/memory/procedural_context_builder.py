@@ -7,7 +7,7 @@ from app.memory.procedural_context_schemas import (
     ProceduralMemoryContextItem,
 )
 from app.memory.procedural_manager import ProceduralMemoryManager
-
+from app.memory.procedural_policy import ProceduralMemoryPolicy
 
 class ProceduralMemoryContextBuilder:
     """Selects relevant validated procedures for an agent."""
@@ -75,9 +75,11 @@ class ProceduralMemoryContextBuilder:
 
         if (
             not isinstance(recipient_agent, str)
-            or not recipient_agent.strip()
+            or recipient_agent not in ProceduralMemoryPolicy.TRUSTED_AGENTS
         ):
-            raise ValueError("A valid recipient agent is required.")
+            raise PermissionError(
+                "Unauthorized procedural memory context recipient."
+            )
 
         procedures = self.manager.search(
             requesting_agent="CoordinatorAgent",

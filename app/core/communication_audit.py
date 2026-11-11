@@ -48,7 +48,11 @@ class CommunicationAudit:
             "shared_fields": sorted(message.payload.keys()),
             "payload_bytes": payload_bytes,
             "outcome": outcome,
-            "reason": reason,
+            "reason": (
+                "Communication policy validation failed."
+                if outcome == "rejected"
+                else None
+            ),
         }
 
         serialized_record = json.dumps(

@@ -5,6 +5,7 @@ import pytest
 
 from app.core.agent_auth import AgentAuthenticator
 from app.core.schemas import AgentMessage, MessageType
+from concurrent.futures import ThreadPoolExecutor
 
 
 TEST_KEY = "a" * 64
@@ -75,7 +76,31 @@ def test_expired_message_is_rejected():
     signed = auth.sign(message, "PlanningAgent")
 
     assert auth.verify(signed) is False
+def test_expired_replay_entries_are_cleaned_up():
+    auth = create_authenticator()
 
+    expired_id = "expired-message"
+    auth._seen_messages[expired_id] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    )
+
+    signed = auth.sign(create_message(), "PlanningAgent")
+
+    assert auth.verify(signed) is True
+    assert expired_id not in auth._seen_messages
+
+
+def test_concurrent_replay_is_rejected():
+    auth = create_authenticator()
+    signed = auth.sign(create_message(), "PlanningAgent")
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(
+            executor.map(lambda _: auth.verify(signed), range(10))
+        )
+
+    assert results.count(True) == 1
+    assert results.count(False) == 9
 
 def test_replayed_message_is_rejected():
     auth = create_authenticator()
@@ -143,3 +168,13 @@ def test_verify_rejects_non_agent_messages(invalid_message):
     auth = create_authenticator()
 
     assert auth.verify(invalid_message) is False
+@pytest.mark.parametrize("invalid_age", [0, -1, True, 1.5, "300"])
+def test_invalid_max_age_is_rejected(invalid_age):
+    with pytest.raises(
+        ValueError,
+        match="Maximum message age must be a positive integer",
+    ):
+        AgentAuthenticator(
+            {"PlanningAgent": TEST_KEY},
+            max_age_seconds=invalid_age,
+        )

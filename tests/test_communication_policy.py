@@ -131,3 +131,13 @@ def test_rejects_unauthorized_verification_payload_field(policy):
 
     with pytest.raises(ValueError, match="Unauthorized payload fields"):
         policy.validate_outgoing(message)
+@pytest.mark.parametrize(
+    "invalid_limit",
+    [0, -1, True, 1.5, "1024"],
+)
+def test_rejects_invalid_payload_limit(invalid_limit):
+    with pytest.raises(
+        ValueError,
+        match="Payload limit must be a positive integer",
+    ):
+        CommunicationPolicy(max_payload_bytes=invalid_limit)

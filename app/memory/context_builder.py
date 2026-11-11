@@ -9,7 +9,7 @@ from app.memory.manager import MemoryManager
 from app.memory.relevance_evaluator import MemoryRelevanceEvaluator
 from app.memory.schemas import MemoryLifecycleStatus
 
-
+from app.memory.memory_policy import MemoryPolicy
 class MemoryContextBuilder:
     """Builds bounded, relevant memory context for agents."""
 
@@ -167,12 +167,19 @@ class MemoryContextBuilder:
         if not isinstance(intent, str) or not intent.strip():
             raise ValueError("A valid task intent is required.")
 
-        if (
-            not isinstance(recipient_agent, str)
-            or not recipient_agent.strip()
-        ):
+        if not isinstance(recipient_agent, str):
+            raise TypeError("recipient_agent must be a string.")
+
+        if not recipient_agent.strip():
             raise ValueError("A valid recipient agent is required.")
 
+        policy = getattr(self.memory_manager, "policy", None)
+
+        if (
+            isinstance(policy, MemoryPolicy)
+            and recipient_agent not in policy.TRUSTED_AGENTS
+        ):
+            raise PermissionError("Unauthorized memory context recipient.")
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise TypeError("Memory limit must be an integer.")
 

@@ -588,7 +588,7 @@ class Coordinator:
             self.communication_audit.record(
                 request,
                 outcome="rejected",
-                reason=str(error),
+                reason="Communication policy validation failed.",
             )
             raise
 
