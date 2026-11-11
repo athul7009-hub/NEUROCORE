@@ -1,10 +1,11 @@
 
 import sqlite3
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
-from contextlib import ExitStack
+
 import pytest
 
 from tests.fakes import create_planning_agent
@@ -45,6 +46,45 @@ from app.memory.semantic_manager import SemanticMemoryManager
 from app.memory.procedural_manager import ProceduralMemoryManager
 from app.memory.working_manager import WorkingMemoryManager
 from app.memory.prospective_manager import ProspectiveMemoryManager
+
+
+@pytest.fixture
+def memory_manager(tmp_path):
+    database = SQLiteDatabase(tmp_path / "memory.db")
+    repository = EpisodicMemoryRepository(database)
+    manager = MemoryManager(repository)
+    manager.initialize()
+    return manager
+
+
+def create_authenticator():
+    return AgentAuthenticator({
+        "Coordinator": "d" * 64,
+        "FileAnalysisAgent": "a" * 64,
+        "PlanningAgent": "b" * 64,
+        "VerificationAgent": "c" * 64,
+    })
+
+
+def create_coordinator(
+    registry,
+    memory_manager,
+    meta_memory_manager=None,
+):
+    if "VerificationAgent" not in registry.list_agents():
+        registry.register(VerificationAgent())
+
+    authenticator = create_authenticator()
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
+
+    return Coordinator(
+        registry,
+        authenticator,
+        memory_manager,
+        meta_memory_manager=meta_memory_manager,
+    )
 
 
 def test_coordinator_delivers_all_five_memory_contexts_to_planning_agent(
@@ -240,7 +280,6 @@ def test_coordinator_delivers_all_five_memory_contexts_to_planning_agent(
         for builder_name, context_key in builder_contexts.items()
     ]
 
-
     with ExitStack() as stack:
         for builder_patch in builder_patches:
             stack.enter_context(builder_patch)
@@ -256,9 +295,6 @@ def test_coordinator_delivers_all_five_memory_contexts_to_planning_agent(
         response = coordinator.handle_task(task)
 
     assert response.message_type == MessageType.RESULT
-
-
-
 
     planning_request = next(
         call.args[0]
@@ -291,44 +327,6 @@ def test_coordinator_delivers_all_five_memory_contexts_to_planning_agent(
         MetaMemoryType.WORKING,
         MetaMemoryType.PROSPECTIVE,
     }
-
-@pytest.fixture
-def memory_manager(tmp_path):
-    database = SQLiteDatabase(tmp_path / "memory.db")
-    repository = EpisodicMemoryRepository(database)
-    manager = MemoryManager(repository)
-    manager.initialize()
-    return manager
-
-
-def create_authenticator():
-    return AgentAuthenticator({
-        "Coordinator": "d" * 64,
-        "FileAnalysisAgent": "a" * 64,
-        "PlanningAgent": "b" * 64,
-        "VerificationAgent": "c" * 64,
-    })
-
-
-def create_coordinator(
-    registry,
-    memory_manager,
-    meta_memory_manager=None,
-):
-    if "VerificationAgent" not in registry.list_agents():
-        registry.register(VerificationAgent())
-
-    authenticator = create_authenticator()
-
-    for agent_name in registry.list_agents():
-        registry.get(agent_name).set_authenticator(authenticator)
-
-    return Coordinator(
-        registry,
-        authenticator,
-        memory_manager,
-        meta_memory_manager=meta_memory_manager,
-    )
 
 
 def test_successful_file_analysis_is_remembered(memory_manager):
@@ -1066,3 +1064,255 @@ def test_usage_tracking_runs_for_verification_agent(memory_manager):
         call.args[0].recipient == "VerificationAgent"
         for call in usage_spy.call_args_list
     )
+
+
+def test_real_five_memory_workflow_reaches_planning_and_verification(
+    memory_manager,
+):
+    import json
+    from datetime import timedelta
+
+    from app.memory.semantic_schemas import (
+        SemanticMemoryRecord,
+        SemanticMemorySource,
+    )
+    from app.memory.procedural_schemas import (
+        ProceduralMemoryRecord,
+        ProceduralMemorySource,
+        ProceduralMemoryStep,
+    )
+    from app.memory.working_schemas import (
+        WorkingMemoryRecord,
+        WorkingMemoryEntryType,
+    )
+    from app.memory.prospective_schemas import (
+        ProspectiveMemoryRecord,
+        ProspectiveMemorySource,
+        ProspectiveTriggerType,
+    )
+
+    now = datetime.now(timezone.utc)
+    objective = "Create a Python project plan for NEUROCORE"
+
+    # Initialize all memory systems on the episodic database.
+    database = memory_manager.repository.database
+
+    semantic_manager = SemanticMemoryManager(
+        SemanticMemoryRepository(database)
+    )
+    procedural_manager = ProceduralMemoryManager(
+        ProceduralMemoryRepository(database)
+    )
+    working_manager = WorkingMemoryManager(
+        WorkingMemoryRepository(database)
+    )
+    prospective_manager = ProspectiveMemoryManager(
+        ProspectiveMemoryRepository(database)
+    )
+
+    for manager in (
+        semantic_manager,
+        procedural_manager,
+        working_manager,
+        prospective_manager,
+    ):
+        manager.initialize()
+
+    # 1. Store a relevant completed episodic memory.
+    previous_task = EpisodicMemoryRecord(
+        task_id=uuid4(),
+        intent=TaskIntent.PLAN_TASK.value,
+        status=MemoryStatus.COMPLETED,
+        agent_name="PlanningAgent",
+        summary="Created a Python project plan for NEUROCORE with structured implementation phases.",
+        created_at=now - timedelta(days=2),
+    )
+    memory_manager.remember_task(previous_task)
+
+
+
+    # 2. Store and validate semantic knowledge.
+    semantic_record = SemanticMemoryRecord(
+        subject="Python project planning",
+        predicate="uses",
+        object="structured planning and verification",
+        confidence=0.95,
+        source=SemanticMemorySource.SYSTEM,
+    )
+    semantic_manager.remember(
+        semantic_record,
+        requesting_agent="CoordinatorAgent",
+    )
+    semantic_manager.validate(
+        semantic_record.memory_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    # 3. Store and validate a relevant procedure.
+    procedural_record = ProceduralMemoryRecord(
+        name="Python project planning",
+        description="Create a structured Python software project plan",
+        when_to_use="When planning a Python software project",
+        steps=[
+            ProceduralMemoryStep(
+                step_number=1,
+                instruction="Define the project objectives.",
+            ),
+            ProceduralMemoryStep(
+                step_number=2,
+                instruction="Break the work into implementation phases.",
+            ),
+        ],
+        confidence=0.95,
+        source=ProceduralMemorySource.SYSTEM,
+    )
+    procedural_manager.remember(
+        procedural_record,
+        requesting_agent="CoordinatorAgent",
+    )
+    procedural_manager.validate(
+        procedural_record.procedure_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    # 4. Store working memory for the current task.
+    task = TaskRequest(
+        user_input=objective,
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    working_record = WorkingMemoryRecord(
+        task_id=task.task_id,
+        key="project_objective",
+        entry_type=WorkingMemoryEntryType.OBSERVATION,
+        content={"objective": objective},
+        source_agent="CoordinatorAgent",
+        created_at=now,
+        updated_at=now,
+        expires_at=now + timedelta(hours=1),
+    )
+    working_manager.remember(
+        working_record,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    # 5. Store a pending prospective intention.
+    prospective_record = ProspectiveMemoryRecord(
+        title="Review Python project plan",
+        description="Review the NEUROCORE Python project plan",
+        action="Check project planning milestones",
+        trigger_type=ProspectiveTriggerType.MANUAL,
+        source=ProspectiveMemorySource.SYSTEM,
+        source_agent="CoordinatorAgent",
+        created_at=now,
+        updated_at=now,
+        expires_at=now + timedelta(days=7),
+    )
+    prospective_manager.remember(
+        prospective_record,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    # Register real agents and construct the Coordinator.
+    registry = AgentRegistry()
+    planning_agent = create_planning_agent()
+    registry.register(planning_agent)
+    registry.register(VerificationAgent())
+
+    authenticator = create_authenticator()
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(authenticator)
+
+    coordinator = Coordinator(
+        registry,
+        authenticator,
+        memory_manager,
+        semantic_memory_manager=semantic_manager,
+        procedural_memory_manager=procedural_manager,
+        working_memory_manager=working_manager,
+        prospective_memory_manager=prospective_manager,
+    )
+
+    # Capture the actual authenticated requests sent to both agents.
+    sent_requests = []
+    original_send = coordinator._send_request
+
+    def capture_request(request):
+        sent_requests.append(request)
+        original_send(request)
+
+    with (
+        patch.object(
+            coordinator,
+            "_send_request",
+            side_effect=capture_request,
+        ),
+        patch.object(
+            planning_agent.reasoning_service,
+            "generate",
+            wraps=planning_agent.reasoning_service.generate,
+        ) as reasoning_spy,
+    ):
+        response = coordinator.handle_task(task)
+
+    # The complete workflow must succeed.
+    assert response.message_type == MessageType.RESULT
+
+    planning_requests = [
+        request
+        for request in sent_requests
+        if request.recipient == "PlanningAgent"
+    ]
+    verification_requests = [
+        request
+        for request in sent_requests
+        if request.recipient == "VerificationAgent"
+    ]
+
+    assert len(planning_requests) == 1
+    assert len(verification_requests) == 1
+
+    planning_request = planning_requests[0]
+    verification_request = verification_requests[0]
+
+    # All five real contexts must reach PlanningAgent.
+    assert len(planning_request.memory_context.memories) == 1
+    assert len(planning_request.semantic_context.memories) == 1
+    assert len(planning_request.procedural_context.memories) == 1
+    assert len(planning_request.working_memory_context.entries) == 1
+    assert len(planning_request.prospective_context.memories) == 1
+
+    # VerificationAgent must also receive all five contexts.
+    assert len(verification_request.memory_context.memories) == 1
+    assert len(verification_request.semantic_context.memories) == 1
+    assert len(verification_request.procedural_context.memories) == 1
+    assert len(verification_request.working_memory_context.entries) == 1
+    assert len(verification_request.prospective_context.memories) == 1
+
+    # The PlanningAgent must serialize all five memory types
+    # into the reasoning request.
+    reasoning_spy.assert_called_once()
+    reasoning_request = reasoning_spy.call_args.args[0]
+    reasoning_context = json.loads(reasoning_request.context)
+
+    assert reasoning_context["episodic"]
+    assert reasoning_context["semantic"]
+    assert reasoning_context["procedural"]
+    assert reasoning_context["working"]
+    assert reasoning_context["prospective"]
+
+    # The new planning outcome must be persisted as episodic memory.
+    stored_task = memory_manager.get_task(
+        task.task_id,
+        requesting_agent="CoordinatorAgent",
+    )
+
+    assert stored_task is not None
+    assert stored_task.status == MemoryStatus.COMPLETED
+    assert stored_task.agent_name == "PlanningAgent"
+    assert "Planning completed" in stored_task.summary
+
+    # All repositories must remain consistent.
+    assert database.check_integrity()
+    assert database.check_foreign_key_integrity()

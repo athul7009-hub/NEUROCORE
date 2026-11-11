@@ -1034,3 +1034,262 @@ def test_coordinator_keeps_request_rejected_when_rejection_audit_fails():
 
     assert response.message_type == MessageType.ERROR
     mock_scan.assert_not_called()
+
+def test_coordinator_recovers_after_planning_agent_exception():
+    registry = AgentRegistry()
+    agent = create_planning_agent()
+    registry.register(agent)
+
+    coordinator = create_coordinator(registry)
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    original_process = agent.process
+
+    with patch.object(
+        agent,
+        "process",
+        side_effect=RuntimeError("Temporary processing failure"),
+    ):
+        failed_response = coordinator.handle_task(task)
+
+    assert failed_response.sender == "Coordinator"
+    assert failed_response.message_type == MessageType.ERROR
+
+    with patch.object(
+        agent,
+        "process",
+        side_effect=original_process,
+    ):
+        recovered_response = coordinator.handle_task(
+            TaskRequest(
+                user_input="Create a plan to analyze my project",
+                intent=TaskIntent.PLAN_TASK,
+            )
+        )
+
+    assert recovered_response.sender == "PlanningAgent"
+    assert recovered_response.message_type == MessageType.RESULT
+    assert recovered_response.signature is not None
+    assert len(recovered_response.payload["steps"]) == 5
+
+def test_coordinator_recovers_after_verification_agent_exception():
+    registry = AgentRegistry()
+    registry.register(create_planning_agent())
+
+    verification_agent = VerificationAgent()
+    registry.register(verification_agent)
+
+    coordinator = create_coordinator(registry)
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    original_process = verification_agent.process
+
+    with patch.object(
+        verification_agent,
+        "process",
+        side_effect=RuntimeError("Temporary verification failure"),
+    ):
+        failed_response = coordinator.handle_task(task)
+
+    assert failed_response.sender == "Coordinator"
+    assert failed_response.message_type == MessageType.ERROR
+
+    with patch.object(
+        verification_agent,
+        "process",
+        side_effect=original_process,
+    ):
+        recovered_response = coordinator.handle_task(
+            TaskRequest(
+                user_input="Create a plan to analyze my project",
+                intent=TaskIntent.PLAN_TASK,
+            )
+        )
+
+    assert recovered_response.sender == "PlanningAgent"
+    assert recovered_response.message_type == MessageType.RESULT
+    assert recovered_response.signature is not None
+    assert len(recovered_response.payload["steps"]) == 5
+
+def test_coordinator_recovers_after_unauthenticated_verification_response():
+    registry = AgentRegistry()
+    registry.register(create_planning_agent())
+
+    verification_agent = VerificationAgent()
+    registry.register(verification_agent)
+
+    coordinator = create_coordinator(registry)
+
+    task = TaskRequest(
+        user_input="Create a project plan",
+        intent=TaskIntent.PLAN_TASK,
+    )
+
+    original_process = verification_agent.process_authenticated
+
+    with patch.object(
+        verification_agent,
+        "process_authenticated",
+        side_effect=lambda message: AgentMessage(
+            task_id=message.task_id,
+            sender="VerificationAgent",
+            recipient="Coordinator",
+            message_type=MessageType.RESULT,
+            payload={"valid": True},
+        ),
+    ):
+        failed_response = coordinator.handle_task(task)
+
+    assert failed_response.sender == "Coordinator"
+    assert failed_response.message_type == MessageType.ERROR
+    assert "authentication failed" in failed_response.payload["error"].lower()
+
+    with patch.object(
+        verification_agent,
+        "process_authenticated",
+        side_effect=original_process,
+    ):
+        recovered_response = coordinator.handle_task(
+            TaskRequest(
+                user_input="Create a plan to analyze my project",
+                intent=TaskIntent.PLAN_TASK,
+            )
+        )
+
+    assert recovered_response.sender == "PlanningAgent"
+    assert recovered_response.message_type == MessageType.RESULT
+    assert recovered_response.signature is not None
+    assert len(recovered_response.payload["steps"]) == 5
+
+def test_coordinator_recovers_after_communication_audit_failure():
+    registry = AgentRegistry()
+    agent = FileAnalysisAgent()
+    registry.register(agent)
+
+    coordinator = create_coordinator(registry)
+
+    original_record = coordinator.communication_audit.record
+
+    with patch.object(
+        coordinator.communication_audit,
+        "record",
+        side_effect=OSError("Temporary audit storage failure"),
+    ):
+        with patch(
+            "app.agents.file_analysis_agent.run_scan"
+        ) as mock_scan:
+            failed_task = TaskRequest(
+                user_input="Analyze my project",
+                intent=TaskIntent.FILE_ANALYSIS,
+                parameters={"directory": "D:/Projects/Demo"},
+            )
+
+            failed_response = coordinator.handle_task(failed_task)
+
+            assert failed_response.message_type == MessageType.ERROR
+            mock_scan.assert_not_called()
+
+    with patch.object(
+        coordinator.communication_audit,
+        "record",
+        side_effect=original_record,
+    ):
+        with patch(
+            "app.agents.file_analysis_agent.run_scan"
+        ) as mock_scan:
+            mock_scan.return_value = {
+                "root": "D:/Projects/Demo",
+                "total_files": 5,
+                "total_size_bytes": 1000,
+                "extension_counts": {".py": 5},
+                "duplicates": [],
+                "recoverable_bytes": 0,
+                "scan_warnings": [],
+                "hash_skipped": 0,
+            }
+
+            recovered_response = coordinator.handle_task(
+                TaskRequest(
+                    user_input="Analyze my project",
+                    intent=TaskIntent.FILE_ANALYSIS,
+                    parameters={"directory": "D:/Projects/Demo"},
+                )
+            )
+
+    assert recovered_response.sender == "FileAnalysisAgent"
+    assert recovered_response.message_type == MessageType.RESULT
+    assert recovered_response.signature is not None
+    mock_scan.assert_called_once()
+
+def test_coordinator_recovers_after_memory_database_failure(tmp_path):
+    registry = AgentRegistry()
+    agent = create_planning_agent()
+    registry.register(agent)
+    registry.register(VerificationAgent())
+
+    from app.memory.database import SQLiteDatabase
+    from app.memory.manager import MemoryManager
+    from app.memory.repositories.episodic_memory import (
+        EpisodicMemoryRepository,
+    )
+
+    database = SQLiteDatabase(tmp_path / "memory.db")
+    repository = EpisodicMemoryRepository(database)
+    memory_manager = MemoryManager(repository)
+    memory_manager.initialize()
+
+    coordinator = Coordinator(
+        registry,
+        create_test_authenticator(),
+        memory_manager,
+    )
+
+    for agent_name in registry.list_agents():
+        registry.get(agent_name).set_authenticator(
+            coordinator.authenticator
+        )
+
+    original_remember_task = memory_manager.remember_task
+
+    with patch.object(
+        memory_manager,
+        "remember_task",
+        side_effect=sqlite3.OperationalError("Database unavailable."),
+    ):
+        failed_persistence_response = coordinator.handle_task(
+            TaskRequest(
+                user_input="Create a plan to analyze my project",
+                intent=TaskIntent.PLAN_TASK,
+            )
+        )
+
+    assert failed_persistence_response.sender == "PlanningAgent"
+    assert failed_persistence_response.message_type == MessageType.RESULT
+    assert failed_persistence_response.signature is not None
+
+    with patch.object(
+        memory_manager,
+        "remember_task",
+        side_effect=original_remember_task,
+    ) as remember_mock:
+        recovered_response = coordinator.handle_task(
+            TaskRequest(
+                user_input="Create a plan for my Python application",
+                intent=TaskIntent.PLAN_TASK,
+            )
+        )
+
+    assert recovered_response.sender == "PlanningAgent"
+    assert recovered_response.message_type == MessageType.RESULT
+    assert recovered_response.signature is not None
+    assert len(recovered_response.payload["steps"]) == 5
+
+    remember_mock.assert_called_once()

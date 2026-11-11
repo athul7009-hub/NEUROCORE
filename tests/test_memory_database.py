@@ -360,3 +360,87 @@ def test_database_waits_for_locked_database(tmp_path):
         ).fetchone()[0]
 
     assert count == 1
+
+def test_database_recovers_after_failed_transaction(tmp_path):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE memory_test (
+                id INTEGER PRIMARY KEY,
+                content TEXT NOT NULL
+            )
+            """
+        )
+
+    # First transaction fails and must roll back.
+    with pytest.raises(sqlite3.IntegrityError):
+        with database.connection() as connection:
+            connection.execute(
+                "INSERT INTO memory_test VALUES (?, ?)",
+                (1, "First record"),
+            )
+            connection.execute(
+                "INSERT INTO memory_test VALUES (?, ?)",
+                (1, "Duplicate record"),
+            )
+
+    # Reuse the same database instance after the failure.
+    with database.connection() as connection:
+        connection.execute(
+            "INSERT INTO memory_test VALUES (?, ?)",
+            (2, "Recovery record"),
+        )
+
+    with database.connection() as connection:
+        records = connection.execute(
+            "SELECT id, content FROM memory_test"
+        ).fetchall()
+
+    assert len(records) == 1
+    assert records[0]["id"] == 2
+    assert records[0]["content"] == "Recovery record"
+    assert database.check_integrity() is True
+
+def test_database_recovers_after_database_path_becomes_available(tmp_path):
+    database_directory = tmp_path / "data"
+    database_path = database_directory / "test.db"
+
+    database = SQLiteDatabase(database_path)
+
+    # Simulate an unavailable database directory.
+    database_directory.write_text("not a directory")
+
+    with pytest.raises(FileExistsError):
+        database.initialize()
+
+    # Restore the expected directory.
+    database_directory.unlink()
+    database_directory.mkdir()
+
+    # Reuse the same database instance.
+    database.initialize()
+
+    with database.connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE memory_test (
+                id INTEGER PRIMARY KEY,
+                content TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO memory_test (content) VALUES (?)",
+            ("Recovered database",),
+        )
+
+    with database.connection() as connection:
+        result = connection.execute(
+            "SELECT content FROM memory_test"
+        ).fetchone()
+
+    assert result["content"] == "Recovered database"
+    assert database.check_integrity() is True

@@ -1,7 +1,7 @@
 
 from datetime import datetime, timezone
 from uuid import uuid4
-
+from app.llm.reasoning import ReasoningError
 from app.agents.planning_agent import PlanningAgent
 from app.core.schemas import AgentMessage, MessageType, TaskPlan
 from app.llm.schemas import ReasoningResponse
@@ -251,3 +251,33 @@ def test_selected_memories_are_passed_to_reasoning_service():
     assert reasoning_service.last_request is not None
     assert "episodic" in reasoning_service.last_request.context
     assert summary in reasoning_service.last_request.context
+
+def test_planning_agent_recovers_after_reasoning_failure():
+    reasoning_service = MockReasoningService()
+    agent = PlanningAgent(reasoning_service=reasoning_service)
+
+    original_generate = reasoning_service.generate
+    call_count = 0
+
+    def fail_once(request):
+        nonlocal call_count
+        call_count += 1
+
+        if call_count == 1:
+            raise ReasoningError("Temporary reasoning failure.")
+
+        return original_generate(request)
+
+    reasoning_service.generate = fail_once
+
+    first_response = agent.process(create_message())
+
+    assert first_response.message_type == MessageType.ERROR
+    assert "Local reasoning failed" in first_response.payload["error"]
+
+    second_response = agent.process(create_message())
+
+    assert second_response.message_type == MessageType.RESULT
+    assert second_response.sender == "PlanningAgent"
+    assert len(TaskPlan.model_validate(second_response.payload).steps) == 5
+    assert call_count == 2

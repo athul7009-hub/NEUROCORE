@@ -135,3 +135,35 @@ def test_agent_rejects_response_with_wrong_sender():
 
     with pytest.raises(ValueError, match="identity does not match"):
         agent.process_authenticated(request)
+
+def test_agent_recovers_after_processing_exception():
+    authenticator = create_authenticator()
+    agent = AuthTestAgent()
+    agent.set_authenticator(authenticator)
+
+    original_process = agent.process
+    call_count = 0
+
+    def fail_once(message):
+        nonlocal call_count
+        call_count += 1
+
+        if call_count == 1:
+            raise RuntimeError("Temporary processing failure.")
+
+        return original_process(message)
+
+    agent.process = fail_once
+
+    with pytest.raises(RuntimeError, match="Temporary processing failure"):
+        agent.process_authenticated(create_request(authenticator))
+
+    response = agent.process_authenticated(
+        create_request(authenticator)
+    )
+
+    assert response.sender == "TestAgent"
+    assert response.message_type == MessageType.RESULT
+    assert response.signature is not None
+    assert authenticator.verify(response) is True
+    assert call_count == 2

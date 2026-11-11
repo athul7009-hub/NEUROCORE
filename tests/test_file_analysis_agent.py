@@ -1,6 +1,8 @@
 from uuid import uuid4
 from unittest.mock import patch
 
+import pytest
+
 from app.agents.file_analysis_agent import FileAnalysisAgent
 from app.core.schemas import AgentMessage, MessageType
 from datetime import datetime, timezone
@@ -184,3 +186,32 @@ def test_file_analysis_rejects_mismatched_memory_recipient():
 
     assert response.message_type == MessageType.ERROR
     assert "recipient mismatch" in response.payload["error"].lower()
+
+@patch("app.agents.file_analysis_agent.run_scan")
+def test_file_analysis_recovers_after_scan_exception(mock_scan):
+    mock_scan.side_effect = [
+        RuntimeError("Temporary scan failure."),
+        {
+            "root": "C:/TestProject",
+            "total_files": 5,
+            "total_size_bytes": 2000,
+            "extension_counts": {".py": 5},
+            "duplicates": [],
+            "recoverable_bytes": 0,
+            "scan_warnings": [],
+            "hash_skipped": [],
+            "files": [],
+        },
+    ]
+
+    agent = FileAnalysisAgent()
+
+    with pytest.raises(RuntimeError, match="Temporary scan failure"):
+        agent.process(create_message())
+
+    response = agent.process(create_message())
+
+    assert response.message_type == MessageType.RESULT
+    assert response.sender == "FileAnalysisAgent"
+    assert response.payload["total_files"] == 5
+    assert mock_scan.call_count == 2

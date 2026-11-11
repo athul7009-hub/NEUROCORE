@@ -481,3 +481,32 @@ def test_normal_retrieval_excludes_archived_memory(repository):
     assert archived.task_id == record.task_id
     assert archived.lifecycle_status == MemoryLifecycleStatus.ARCHIVED
     assert archived.archived_at is not None
+
+def test_repository_recovers_after_failed_save(repository):
+    record = create_record()
+
+    # Cause a database constraint failure.
+    with pytest.raises(sqlite3.IntegrityError):
+        repository.save(record)
+        repository.save(record)
+
+    # Save a different record using the same repository.
+    recovery_record = create_record()
+    repository.save(recovery_record)
+
+    retrieved = repository.get(recovery_record.task_id)
+
+    assert retrieved == recovery_record
+
+    # The failed duplicate operation must not corrupt stored data.
+    recent_ids = {
+        item.task_id
+        for item in repository.get_recent(limit=10)
+    }
+
+    assert recent_ids == {
+        record.task_id,
+        recovery_record.task_id,
+    }
+
+    assert repository.database.check_integrity() is True
