@@ -1,8 +1,16 @@
 
-from pydantic import BaseModel
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+from uuid import uuid4
+
+from pydantic import BaseModel
+
 from app.core.schemas import ToolRequest, ToolStatus
+from app.memory.database import SQLiteDatabase
+from app.tools.tool_execution_ledger import (
+    ExecutionState,
+    ToolExecutionLedger,
+)
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_registry import ToolRegistry
 from app.tools.tool_schemas import ToolDefinition
@@ -98,6 +106,7 @@ def test_approval_required_tool_is_not_executed():
     assert result.success is False
     assert result.status == ToolStatus.PROPOSED, result.message
 
+
 def test_dry_run_does_not_execute_tool():
     executor = create_executor()
 
@@ -111,7 +120,6 @@ def test_dry_run_does_not_execute_tool():
 
     assert result.success is False
     assert result.status == ToolStatus.PROPOSED
-
 
 
 def test_invalid_output_returns_failed_result():
@@ -142,6 +150,8 @@ def test_invalid_output_returns_failed_result():
     assert result.success is False
     assert result.status == ToolStatus.FAILED
     assert "validation failed" in result.message.lower()
+
+
 def test_approved_tool_executes_only_once():
     executor = create_executor(requires_approval=True)
 
@@ -151,19 +161,16 @@ def test_approved_tool_executes_only_once():
         dry_run=False,
     )
 
-    # First attempt registers the pending approval.
     first_result = executor.execute(request)
 
     assert first_result.status == ToolStatus.PROPOSED
     assert first_result.success is False
 
-    # Repeated attempts must not execute the tool.
     second_result = executor.execute(request)
 
     assert second_result.status == ToolStatus.PROPOSED
     assert second_result.success is False
 
-    # Explicit approval allows execution.
     executor.approve(request.action_id)
 
     approved_result = executor.execute(request)
@@ -172,11 +179,12 @@ def test_approved_tool_executes_only_once():
     assert approved_result.success is True
     assert approved_result.data == {"result": "hello"}
 
-    # Approval cannot be reused.
     repeated_result = executor.execute(request)
 
     assert repeated_result.status == ToolStatus.FAILED
     assert repeated_result.success is False
+
+
 def test_rejected_tool_cannot_execute():
     executor = create_executor(requires_approval=True)
 
@@ -196,6 +204,8 @@ def test_rejected_tool_cannot_execute():
     assert rejected_result.status == ToolStatus.REJECTED
     assert rejected_result.success is False
     assert "rejected" in rejected_result.message.lower()
+
+
 def test_modified_request_cannot_use_existing_approval():
     executor = create_executor(requires_approval=True)
 
@@ -236,6 +246,7 @@ def test_validation_error_does_not_expose_submitted_values():
     assert result.status == ToolStatus.FAILED
     assert "validation failed" in result.message.lower()
     assert secret not in result.message
+
 
 def test_dry_run_never_calls_handler():
     calls = []
@@ -353,3 +364,154 @@ def test_approved_action_executes_only_once_concurrently():
     assert len(executed) == 1
     assert len(calls) == 1
     assert calls == ["hello"]
+
+
+def test_failed_execution_reservation_preserves_approval(
+    tmp_path,
+    monkeypatch,
+):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    ledger = ToolExecutionLedger(database)
+    calls = []
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="sample",
+            description="Sample test tool",
+            handler=lambda request: (
+                calls.append(request) or {"result": request.value}
+            ),
+            input_schema=SampleInput,
+            output_schema=SampleOutput,
+            requires_approval=True,
+            read_only=True,
+        )
+    )
+
+    executor = ToolExecutor(
+        registry,
+        execution_ledger=ledger,
+    )
+
+    request = ToolRequest(
+        tool_name="sample",
+        parameters={"value": "hello"},
+        dry_run=False,
+    )
+
+    assert executor.execute(request).status == ToolStatus.PROPOSED
+
+    executor.approve(request.action_id)
+
+    original_transition = ledger.transition
+
+    def fail_execution_reservation(
+        action_id,
+        expected_state,
+        new_state,
+    ):
+        if (
+            expected_state == ExecutionState.APPROVED
+            and new_state == ExecutionState.EXECUTING
+        ):
+            return False
+
+        return original_transition(
+            action_id,
+            expected_state,
+            new_state,
+        )
+
+    monkeypatch.setattr(
+        ledger,
+        "transition",
+        fail_execution_reservation,
+    )
+
+    result = executor.execute(request)
+
+    assert result.status == ToolStatus.FAILED
+    assert result.success is False
+    assert ledger.get_state(request.action_id) == ExecutionState.APPROVED
+    assert executor.approval_manager.is_approved(request.action_id)
+    assert calls == []
+
+
+def test_interrupted_action_cannot_execute_after_restart(tmp_path):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
+
+    calls = []
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="sample",
+            description="Sample tool",
+            input_schema=SampleInput,
+            output_schema=SampleOutput,
+            handler=lambda request: (
+                calls.append(request.value)
+                or {"result": request.value}
+            ),
+            requires_approval=False,
+            read_only=True,
+        )
+    )
+
+    action_id = uuid4()
+
+    request = ToolRequest(
+        action_id=action_id,
+        tool_name="sample",
+        parameters={"value": "test"},
+        requires_approval=False,
+        dry_run=False,
+    )
+
+    ledger = ToolExecutionLedger(database)
+
+    executor = ToolExecutor(
+        registry=registry,
+        execution_ledger=ledger,
+    )
+
+    fingerprint = executor.approval_manager._generate_fingerprint(
+        request,
+        registry.get("sample"),
+    )
+
+    ledger.register(
+        action_id,
+        "sample",
+        fingerprint,
+    )
+
+    assert ledger.transition(
+        action_id,
+        ExecutionState.PENDING_APPROVAL,
+        ExecutionState.EXECUTING,
+    )
+
+    # Simulate application restart and persistent-state recovery.
+    restarted_ledger = ToolExecutionLedger(database)
+    restarted_ledger.recover_after_restart()
+
+    restarted_executor = ToolExecutor(
+        registry=registry,
+        execution_ledger=restarted_ledger,
+    )
+
+    result = restarted_executor.execute(request)
+
+    assert result.status == ToolStatus.FAILED
+    assert result.success is False
+    assert calls == []
+
+    assert (
+        restarted_ledger.get_state(action_id)
+        == ExecutionState.INTERRUPTED
+    )

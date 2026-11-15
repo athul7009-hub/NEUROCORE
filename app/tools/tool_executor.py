@@ -178,11 +178,6 @@ class ToolExecutor:
                             "Invalid persistent approval state."
                         )
 
-                    if not manager.consume_approval(request, tool):
-                        raise ValueError(
-                            "Tool approval validation failed."
-                        )
-
                     if not ledger.transition(
                         action_id,
                         ExecutionState.APPROVED,
@@ -191,6 +186,20 @@ class ToolExecutor:
                         raise ValueError(
                             "Could not reserve action for execution."
                         )
+
+                    execution_started = True
+
+                    if not manager.consume_approval(request, tool):
+                        ledger.transition(
+                            action_id,
+                            ExecutionState.EXECUTING,
+                            ExecutionState.FAILED,
+                        )
+                    execution_started = False
+
+                    raise ValueError(
+                        "Tool approval validation failed."
+                    )
 
                 # 5. Tools that do not require approval.
                 else:

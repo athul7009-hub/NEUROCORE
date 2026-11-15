@@ -1,5 +1,5 @@
 
-from unittest.mock import patch
+from unittest.mock import patch, call
 
 from app.runtime import create_runtime
 
@@ -34,3 +34,45 @@ def test_create_runtime_initializes_application_services():
         )
 
         mock_chat_service.assert_called_once_with()
+
+
+def test_runtime_recovers_execution_ledger_before_executor_creation():
+    events = []
+
+    with (
+        patch("app.runtime.SQLiteDatabase") as mock_database_class,
+        patch("app.runtime.ToolExecutionLedger") as mock_ledger_class,
+        patch("app.runtime.ToolExecutor") as mock_executor_class,
+        patch("app.runtime.create_coordinator") as mock_coordinator,
+        patch("app.runtime.ChatService"),
+    ):
+        database = mock_database_class.return_value
+        ledger = mock_ledger_class.return_value
+
+        database.initialize.side_effect = lambda: events.append(
+            "database_initialized"
+        )
+        ledger.recover_after_restart.side_effect = lambda: events.append(
+            "recovery_completed"
+        )
+        mock_executor_class.side_effect = lambda *args, **kwargs: (
+            events.append("executor_created") or object()
+        )
+
+        runtime = create_runtime()
+
+        assert events == [
+            "database_initialized",
+            "recovery_completed",
+            "executor_created",
+
+        ]
+
+        mock_ledger_class.assert_called_once_with(database)
+        mock_executor_class.assert_called_once_with(
+            mock_executor_class.call_args.args[0],
+            execution_ledger=ledger,
+        )
+
+        assert mock_coordinator.call_args.kwargs["tool_executor"] is runtime.tool_executor
+        assert mock_coordinator.call_args.kwargs["database"] is database

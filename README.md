@@ -6,15 +6,15 @@
 
 NEUROCORE is an experimental local-first cognitive system built with Python for Windows 11.
 
-It coordinates specialized AI agents, manages multiple forms of structured memory, uses local language models for reasoning, and supports controlled file operations with security checks and human approval.
+It coordinates specialized AI agents, manages multiple forms of structured memory, uses local language models for reasoning, and supports controlled tool execution with security checks and human approval.
 
-Unlike a conventional chatbot, NEUROCORE is designed around coordinated agents, selective information sharing, memory lifecycle management, verification, and controlled execution.
+Unlike a conventional chatbot, NEUROCORE is designed around coordinated agents, selective information sharing, memory lifecycle management, verification, persistent execution tracking, and controlled actions.
 
 ## Technology Stack
 
 - Python 3.11
 - Pydantic and Pydantic Settings
-- SQLite for persistent memory
+- SQLite for persistent memory and execution tracking
 - Ollama for local LLM inference
 - Qwen3 8B (default reasoning model)
 - Pytest for automated testing
@@ -30,16 +30,18 @@ Unlike a conventional chatbot, NEUROCORE is designed around coordinated agents, 
 - Controlled information sharing between agents.
 - Agent authentication using HMAC signatures.
 - Replay protection and communication auditing.
+- Verification of planning results before acceptance.
 
 ### 2. Structured Memory Management
 
-NEUROCORE implements five primary memory types:
+NEUROCORE implements multiple coordinated memory systems:
 
 - **Episodic Memory:** Stores completed and failed task experiences.
 - **Semantic Memory:** Stores structured knowledge.
 - **Procedural Memory:** Stores reusable procedures.
 - **Working Memory:** Manages task-related temporary context.
 - **Prospective Memory:** Manages future intentions and reminders.
+- **Meta-memory and Meta-conflict:** Support memory oversight, identity resolution, retention assessment, and memory influence tracking.
 
 Additional memory capabilities include:
 
@@ -50,7 +52,7 @@ Additional memory capabilities include:
 - Identity resolution and retention assessment.
 - Memory influence tracking and metadata.
 
-### 3. Local AI Reasoning
+### 3. Local AI Reasoning and Runtime
 
 - Ollama integration for local model inference.
 - Structured reasoning requests and responses.
@@ -58,6 +60,8 @@ Additional memory capabilities include:
 - Pydantic response validation.
 - Task planning through PlanningAgent.
 - Reasoning metadata, confidence, and limitations.
+- Runtime integration for coordinating application services.
+- Local chat service integration.
 
 ### 4. File Analysis and Controlled Operations
 
@@ -65,20 +69,35 @@ Additional memory capabilities include:
 - File metadata collection and SHA-256 hashing.
 - Duplicate candidate detection.
 - Scan safety checks, including protected paths and symbolic links.
+- Cloud Files placeholder handling.
 - Controlled CREATE, COPY, and RENAME operations.
 - Operation planning, validation, dry-run, and approval checks.
 - Quarantine and recovery-related functionality.
 
-### 5. Verification and Reliability
+### 5. Tool Execution and Recovery
+
+- Centralized tool registry and execution.
+- Structured tool input and output validation.
+- Explicit approval requirements for consequential operations.
+- Approval auditing and persistent approval-state tracking.
+- Single-use approval enforcement.
+- Persistent SQLite execution ledger.
+- Execution fingerprints to prevent modified requests from reusing approvals.
+- Startup recovery of interrupted execution records.
+- Automatic retry prohibited for interrupted actions requiring manual recovery.
+
+Tool execution is routed through the controlled executor rather than directly invoking registered handlers from application workflows.
+
+### 6. Verification and Reliability
 
 - Planning results are checked through VerificationAgent.
 - Authenticated agent communication.
 - Communication audit records.
-- Database integrity checks during initialization.
+- Database initialization and integrity safeguards.
 - Controlled error handling.
-- Automated tests covering agents, memory, security, and file operations.
+- Automated regression tests covering agents, memory, security, tool execution, and file operations.
 
-### 6. Command-Line Interface
+### 7. Command-Line Interface
 
 Start NEUROCORE with:
 
@@ -90,9 +109,12 @@ Available operations:
 
 1. File Analysis
 2. Create Plan
+3. Scan Directory
 0. Exit
 
-Planning results require approval before execution. The CLI currently provides analysis and planning workflows; it is not a general-purpose autonomous desktop assistant.
+Planning results require verification. Consequential tool operations require the appropriate approval before execution.
+
+The CLI currently provides focused analysis, scanning, and planning workflows. It is not a general-purpose autonomous desktop assistant.
 
 ## Project Structure
 
@@ -106,15 +128,7 @@ NEUROCORE/
 │   │   ├── verification_agent.py
 │   │   └── registry.py
 │   ├── core/
-│   │   ├── config.py
-│   │   ├── schemas.py
-│   │   ├── agent_auth.py
-│   │   ├── communication_policy.py
-│   │   └── communication_audit.py
 │   ├── llm/
-│   │   ├── ollama_client.py
-│   │   ├── reasoning.py
-│   │   └── schemas.py
 │   ├── memory/
 │   │   ├── episodic/
 │   │   ├── semantic/
@@ -124,12 +138,14 @@ NEUROCORE/
 │   │   └── ...
 │   ├── tools/
 │   ├── bootstrap.py
+│   ├── runtime.py
 │   └── __main__.py
 ├── tests/
 ├── data/
 ├── logs/
 ├── .env.example
 ├── .gitignore
+├── requirements.txt
 └── README.md
 ```
 
@@ -226,20 +242,31 @@ python -m pytest -v
 NEUROCORE follows a controlled-execution approach:
 
 - Explicitly approved scan roots.
-- Protected-path and symlink safety checks.
-- Human approval for controlled operations.
+- Protected-path and symbolic-link safety checks.
+- Human approval for consequential operations.
 - Dry-run and validation before execution.
+- Centralized tool execution.
+- Persistent execution tracking and crash recovery.
 - Authenticated inter-agent communication.
 - Restricted information sharing.
 - Memory access authorization.
 - Verification of planning results.
 - Audit records that avoid storing communication payload values.
+- Isolation and least-privilege requirements for future external tools and plugins.
 
 NEUROCORE is designed to avoid unrestricted autonomous execution. Passing a plan through verification does not itself authorize execution.
 
+### Known Platform Limitation
+
+Windows AppContainer integration has encountered a runtime initialization failure (`0xC0000142`, `STATUS_DLL_INIT_FAILED`).
+
+The related isolation tests remain skipped. Windows AppContainer isolation is therefore **not verified**.
+
+Plugin execution and external plugin integration remain deferred until the isolation and recovery requirements can be demonstrated reliably. The existing experimental plugin work is not part of the verified core release.
+
 ## Development Status
 
-**Milestone: Core implementation and system validation completed; V1 release preparation in progress.**
+**Milestone: V1.1 core implementation and regression validation completed; release preparation in progress.**
 
 Implemented areas:
 
@@ -252,26 +279,30 @@ Implemented areas:
 - Structured memory systems.
 - Memory lifecycle and context management.
 - Authentication and communication security.
+- Centralized tool registry and execution.
+- Persistent execution ledger and crash recovery.
+- Runtime and local chat integration.
 - Command-line workflows.
 - Automated regression testing.
 
 Latest full regression result:
 
-**1,318 passed, 0 failed, 1 warning.**
+**1,568 passed, 2 skipped, 1 warning.**
 
-The warning originates from a negative test that intentionally supplies an invalid payload to verify rejection behavior.
+The warning originates from a negative test that intentionally supplies an invalid payload to verify rejection behavior. The two skipped tests concern the currently unverified Windows AppContainer integration.
 
 ## Future Development
 
-The following are outside the current V1 scope:
+The following capabilities are deferred beyond the current core release:
 
 - Graphical user interface.
 - Voice-controlled desktop assistant.
 - Advanced hybrid local/cloud model routing.
 - Direct Obsidian integration.
-- Expanded autonomous workflows.
+- Expanded external plugin ecosystem.
+- Advanced autonomous workflows.
 
-These features will be considered separately after the core system's V1 release.
+These features will be considered separately after the core system's release and stability requirements are satisfied.
 
 ## License
 

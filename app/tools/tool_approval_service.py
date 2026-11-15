@@ -40,7 +40,23 @@ class ToolApprovalService:
                         "Persistent approval state transition failed."
                     )
 
-            self.manager.approve(action_id)
+            try:
+                self.manager.approve(action_id)
+            except Exception as error:
+                if self.ledger is not None:
+                    restored = self.ledger.transition(
+                        action_id,
+                        ExecutionState.APPROVED,
+                        ExecutionState.PENDING_APPROVAL,
+                    )
+
+                    if not restored:
+                        raise RuntimeError(
+                            "Approval failed and persistent state "
+                            "could not be restored."
+                        ) from error
+
+                raise
 
     def reject(self, action_id: UUID) -> None:
         with self._lock:
@@ -58,4 +74,20 @@ class ToolApprovalService:
                         "Persistent rejection state transition failed."
                     )
 
-            self.manager.reject(action_id)
+            try:
+                self.manager.reject(action_id)
+            except Exception as error:
+                if self.ledger is not None:
+                    restored = self.ledger.transition(
+                        action_id,
+                        ExecutionState.REJECTED,
+                        ExecutionState.PENDING_APPROVAL,
+                    )
+
+                    if not restored:
+                        raise RuntimeError(
+                            "Rejection failed and persistent state "
+                            "could not be restored."
+                        ) from error
+
+                raise
