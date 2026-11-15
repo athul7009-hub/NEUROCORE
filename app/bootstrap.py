@@ -1,6 +1,9 @@
 
 import sqlite3
-
+from app.memory.repositories.meta_conflict import (
+    MetaMemoryConflictRepository,
+)
+from app.memory.meta_conflict_manager import MetaMemoryConflictManager
 from app.agents.coordinator import Coordinator
 from app.agents.file_analysis_agent import FileAnalysisAgent
 from app.agents.planning_agent import PlanningAgent
@@ -37,13 +40,16 @@ from app.memory.repositories.prospective_memory import (
     ProspectiveMemoryRepository,
 )
 from app.memory.prospective_manager import ProspectiveMemoryManager
+from app.memory.diagnostics import MemoryDiagnostics
+from app.tools.tool_executor import ToolExecutor
 
-
-def create_coordinator() -> Coordinator:
+def create_coordinator(
+        tool_executor: ToolExecutor | None = None,
+) -> Coordinator:
     """Build and initialize the NEUROCORE application."""
 
     database = SQLiteDatabase(settings.database_path)
-
+    memory_diagnostics = MemoryDiagnostics(database)
     database.database_path.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -92,6 +98,12 @@ def create_coordinator() -> Coordinator:
     meta_repository = MetaMemoryRepository(database)
     meta_memory_manager = MetaMemoryManager(meta_repository)
     meta_memory_manager.initialize()
+    # Meta-memory conflict management.
+    meta_conflict_repository = MetaMemoryConflictRepository(database)
+    meta_conflict_manager = MetaMemoryConflictManager(
+        meta_conflict_repository
+    )
+    meta_conflict_manager.initialize()
     # Register specialized agents.
     registry = AgentRegistry()
     registry.register(FileAnalysisAgent())
@@ -118,4 +130,7 @@ def create_coordinator() -> Coordinator:
         working_memory_manager=working_memory_manager,
         prospective_memory_manager=prospective_memory_manager,
         meta_memory_manager=meta_memory_manager,
+        meta_conflict_manager=meta_conflict_manager,
+        memory_diagnostics=memory_diagnostics,
+        tool_executor=tool_executor,
     )

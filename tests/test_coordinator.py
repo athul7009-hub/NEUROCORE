@@ -20,10 +20,14 @@ from app.core.schemas import (
     MessageType,
     TaskIntent,
     TaskRequest,
+    ToolRequest,
+    ToolResult,
+    ToolStatus,
 )
 from app.llm.schemas import ReasoningResponse
-
-
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from app.tools.tool_schemas import ScanDirectoryInput, ScanDirectoryOutput
 class MockReasoningService:
     def generate(self, request):
         return ReasoningResponse(
@@ -1295,3 +1299,157 @@ def test_coordinator_recovers_after_memory_database_failure(tmp_path):
     assert len(recovered_response.payload["steps"]) == 5
 
     remember_mock.assert_called_once()
+def test_coordinator_lists_available_tools():
+    executor = Mock()
+    executor.registry.list_definitions.return_value = [
+        SimpleNamespace(
+            name="scan_directory",
+            description="Scan an approved directory.",
+            requires_approval=False,
+            read_only=True,
+        )
+    ]
+
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+        tool_executor=executor,
+    )
+
+    tools = coordinator.list_available_tools()
+
+    assert tools == [
+        {
+            "name": "scan_directory",
+            "description": "Scan an approved directory.",
+            "requires_approval": False,
+            "read_only": True,
+        }
+    ]
+
+
+def test_coordinator_executes_tool_through_executor():
+    executor = Mock()
+    request = ToolRequest(
+        tool_name="scan_directory",
+        parameters={"directory": "D:/Projects/Demo"},
+        dry_run=False,
+    )
+    expected_result = Mock()
+    executor.execute.return_value = expected_result
+
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+        tool_executor=executor,
+    )
+
+    result = coordinator.execute_tool(request)
+
+    assert result is expected_result
+    executor.execute.assert_called_once_with(request)
+
+
+def test_coordinator_approves_tool_through_executor():
+    executor = Mock()
+    action_id = uuid4()
+
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+        tool_executor=executor,
+    )
+
+    coordinator.approve_tool(action_id)
+
+    executor.approve.assert_called_once_with(action_id)
+
+
+def test_coordinator_rejects_tool_through_executor():
+    executor = Mock()
+    action_id = uuid4()
+
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+        tool_executor=executor,
+    )
+
+    coordinator.reject_tool(action_id)
+
+    executor.reject.assert_called_once_with(action_id)
+def test_coordinator_returns_empty_tools_when_executor_is_not_configured():
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+    )
+
+    assert coordinator.list_available_tools() == []
+
+
+def test_coordinator_rejects_tool_execution_without_executor():
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+    )
+    request = ToolRequest(tool_name="scan_directory")
+
+    with pytest.raises(RuntimeError, match="Tool execution is not configured."):
+        coordinator.execute_tool(request)
+
+
+def test_coordinator_rejects_approval_without_executor():
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+    )
+
+    with pytest.raises(RuntimeError, match="Tool execution is not configured."):
+        coordinator.approve_tool(uuid4())
+def test_coordinator_does_not_execute_tool_without_approval():
+    from app.tools.tool_executor import ToolExecutor
+    from app.tools.tool_registry import ToolRegistry
+    from app.tools.tool_schemas import ToolDefinition
+
+    registry = ToolRegistry()
+    handler = Mock()
+
+    registry.register(
+        ToolDefinition(
+            name="test_tool",
+            description="Test approval enforcement.",
+            handler=handler,
+            input_schema=ScanDirectoryInput,
+            output_schema=ScanDirectoryOutput,
+            requires_approval=True,
+        )
+    )
+
+    executor = ToolExecutor(registry)
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+        tool_executor=executor,
+    )
+
+    request = ToolRequest(
+        tool_name="test_tool",
+        parameters={"directory": "D:/Projects"},
+        dry_run=False,
+    )
+
+    result = coordinator.execute_tool(request)
+
+    assert result.status == ToolStatus.PROPOSED
+    assert handler.call_count == 0
+def test_coordinator_rejects_rejection_without_executor():
+    coordinator = Coordinator(
+        AgentRegistry(),
+        create_test_authenticator(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Tool execution is not configured.",
+    ):
+        coordinator.reject_tool(uuid4())

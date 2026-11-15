@@ -1,7 +1,7 @@
 
 import logging
 import sqlite3
-from uuid import UUID
+
 from app.memory.identity_resolver import MemoryIdentityResolver
 from app.memory.identity_schemas import (
     MemoryIdentityAssessment,
@@ -16,6 +16,8 @@ from app.core.schemas import (
     MessageType,
     TaskIntent,
     TaskRequest,
+    ToolRequest,
+    ToolResult,
 )
 from app.memory.context_builder import MemoryContextBuilder
 from app.memory.manager import MemoryManager
@@ -47,8 +49,12 @@ from app.memory.meta_maintenance_schemas import (
     MetaMemoryMaintenanceReport,
 )
 from datetime import datetime
+from uuid import UUID
+from app.memory.diagnostics import MemoryDiagnostics
+from app.memory.diagnostics_schemas import MemoryDiagnosticsReport
 logger = logging.getLogger(__name__)
-
+from app.memory.meta_conflict_manager import MetaMemoryConflictManager
+from app.tools.tool_executor import ToolExecutor
 
 class Coordinator:
     """Coordinates agent execution and controlled memory operations."""
@@ -63,13 +69,17 @@ class Coordinator:
         working_memory_manager: WorkingMemoryManager | None = None,
         prospective_memory_manager: ProspectiveMemoryManager | None = None,
         meta_memory_manager: MetaMemoryManager | None = None,
+        meta_conflict_manager: MetaMemoryConflictManager | None = None,
+        memory_diagnostics: MemoryDiagnostics | None = None,
+        tool_executor: ToolExecutor | None = None
     ):
         self.registry = registry
+        self.tool_executor = tool_executor
         self.authenticator = authenticator
-
+        self.memory_diagnostics = memory_diagnostics
         self.communication_policy = CommunicationPolicy()
         self.communication_audit = CommunicationAudit()
-
+        self.meta_conflict_manager = meta_conflict_manager
         self.memory_manager = memory_manager
         self.semantic_memory_manager = semantic_memory_manager
         self.procedural_memory_manager = procedural_memory_manager
@@ -229,6 +239,44 @@ class Coordinator:
                 task_id,
             )
             raise
+    def validate_semantic_memory(self, memory_id: UUID) -> bool:
+        if self.semantic_memory_manager is None:
+            raise RuntimeError("Semantic memory manager is unavailable.")
+
+        return self.semantic_memory_manager.validate(
+            memory_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def deprecate_semantic_memory(self, memory_id: UUID) -> bool:
+        if self.semantic_memory_manager is None:
+            raise RuntimeError("Semantic memory manager is unavailable.")
+
+        return self.semantic_memory_manager.deprecate(
+            memory_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def validate_procedural_memory(self, procedure_id: UUID) -> bool:
+        if self.procedural_memory_manager is None:
+            raise RuntimeError("Procedural memory manager is unavailable.")
+
+        return self.procedural_memory_manager.validate(
+            procedure_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def deprecate_procedural_memory(self, procedure_id: UUID) -> bool:
+        if self.procedural_memory_manager is None:
+            raise RuntimeError("Procedural memory manager is unavailable.")
+
+        return self.procedural_memory_manager.deprecate(
+            procedure_id,
+            requesting_agent="CoordinatorAgent",
+        )
     def inspect_memory_identity(
         self,
         request: MemoryIdentityRequest,
@@ -887,3 +935,156 @@ class Coordinator:
                         memory_type.value,
                         memory_id,
                     )
+    def trigger_prospective_memory(self, memory_id: UUID) -> bool:
+        if self.prospective_memory_manager is None:
+            raise RuntimeError("Prospective memory manager is unavailable.")
+
+        return self.prospective_memory_manager.trigger(
+            memory_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def complete_prospective_memory(self, memory_id: UUID) -> bool:
+        if self.prospective_memory_manager is None:
+            raise RuntimeError("Prospective memory manager is unavailable.")
+
+        return self.prospective_memory_manager.complete(
+            memory_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def cancel_prospective_memory(self, memory_id: UUID) -> bool:
+        if self.prospective_memory_manager is None:
+            raise RuntimeError("Prospective memory manager is unavailable.")
+
+        return self.prospective_memory_manager.cancel(
+            memory_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def expire_prospective_memory(self, memory_id: UUID) -> bool:
+        if self.prospective_memory_manager is None:
+            raise RuntimeError("Prospective memory manager is unavailable.")
+
+        return self.prospective_memory_manager.expire(
+            memory_id,
+            requesting_agent="CoordinatorAgent",
+        )
+    def assess_meta_memory(
+        self,
+        meta_id: UUID,
+        *,
+        now: datetime | None = None,
+    ):
+        if self.meta_memory_manager is None:
+            raise RuntimeError("Meta-memory manager is unavailable.")
+
+        return self.meta_memory_manager.assess(
+            meta_id,
+            requesting_agent="CoordinatorAgent",
+            now=now,
+        )
+
+
+    def assess_and_persist_meta_memory(
+        self,
+        meta_id: UUID,
+        *,
+        now: datetime | None = None,
+    ):
+        if self.meta_memory_manager is None:
+            raise RuntimeError("Meta-memory manager is unavailable.")
+
+        return self.meta_memory_manager.assess_and_persist(
+            meta_id,
+            requesting_agent="CoordinatorAgent",
+            now=now,
+        )
+    def confirm_meta_conflict(self, conflict_id: UUID) -> bool:
+        if self.meta_conflict_manager is None:
+            raise RuntimeError("Meta-conflict manager is unavailable.")
+
+        return self.meta_conflict_manager.confirm(
+            conflict_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def dismiss_meta_conflict(self, conflict_id: UUID) -> bool:
+        if self.meta_conflict_manager is None:
+            raise RuntimeError("Meta-conflict manager is unavailable.")
+
+        return self.meta_conflict_manager.dismiss(
+            conflict_id,
+            requesting_agent="CoordinatorAgent",
+        )
+
+
+    def resolve_meta_conflict(self, conflict_id: UUID) -> bool:
+        if self.meta_conflict_manager is None:
+            raise RuntimeError("Meta-conflict manager is unavailable.")
+
+        return self.meta_conflict_manager.resolve(
+            conflict_id,
+            requesting_agent="CoordinatorAgent",
+        )
+    def list_registered_agents(self) -> list[tuple[str, str]]:
+        """Returns registered agent names and descriptions."""
+
+        return [
+            (name, self.registry.get(name).description)
+            for name in self.registry.list_agents()
+        ]
+    def inspect_memory_diagnostics(self) -> MemoryDiagnosticsReport:
+        """Returns aggregate-only memory diagnostics."""
+
+        if self.memory_diagnostics is None:
+            raise RuntimeError("Memory diagnostics are unavailable.")
+
+        return self.memory_diagnostics.inspect()
+
+    def list_available_tools(self) -> list[dict[str, str | bool]]:
+        """Returns safe metadata for registered tools."""
+
+        if self.tool_executor is None:
+            return []
+
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "requires_approval": tool.requires_approval,
+                "read_only": tool.read_only,
+            }
+            for tool in self.tool_executor.registry.list_definitions()
+        ]
+
+
+    def execute_tool(self, request: ToolRequest) -> ToolResult:
+        """Executes a tool through the controlled executor."""
+
+        if self.tool_executor is None:
+            raise RuntimeError("Tool execution is not configured.")
+
+        return self.tool_executor.execute(request)
+
+
+    def approve_tool(self, action_id: UUID) -> None:
+        """Approves a pending tool action."""
+
+        if self.tool_executor is None:
+            raise RuntimeError("Tool execution is not configured.")
+
+        self.tool_executor.approve(action_id)
+
+
+    def reject_tool(self, action_id: UUID) -> None:
+        """Rejects a pending tool action."""
+
+        if self.tool_executor is None:
+            raise RuntimeError("Tool execution is not configured.")
+
+        self.tool_executor.reject(action_id)

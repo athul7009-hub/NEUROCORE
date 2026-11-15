@@ -29,7 +29,7 @@ class OllamaClient:
         self,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: int = 120,
+        timeout: int = 300,
     ):
         self.base_url = (
             base_url or settings.ollama_base_url
@@ -46,18 +46,65 @@ class OllamaClient:
 
         if timeout < 1:
             raise ValueError("Timeout must be at least 1 second.")
+    def list_models(self) -> list[str]:
+        """Return the names of models installed in Ollama."""
 
+        request = Request(
+            url=f"{self.base_url}/api/tags",
+            method="GET",
+        )
+
+        try:
+            with urlopen(request, timeout=10) as response:
+                result = json.loads(response.read().decode("utf-8"))
+
+        except HTTPError as exc:
+            raise OllamaRequestError(
+                f"Ollama returned HTTP {exc.code}."
+            ) from exc
+
+        except (URLError, TimeoutError, OSError) as exc:
+            raise OllamaConnectionError(
+                f"Could not communicate with Ollama: {exc}"
+            ) from exc
+
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise OllamaResponseError(
+                "Ollama returned invalid JSON."
+            ) from exc
+
+        if not isinstance(result, dict) or not isinstance(
+            result.get("models"), list
+        ):
+            raise OllamaResponseError(
+                "Ollama response is missing its models list."
+            )
+
+        models = result["models"]
+
+        if any(
+            not isinstance(model, dict)
+            or not isinstance(model.get("name"), str)
+            for model in models
+        ):
+            raise OllamaResponseError(
+                "Ollama returned an invalid model entry."
+            )
+
+        return [model["name"] for model in models]
     def chat(
         self,
         messages: list[dict[str, str]],
         model: str | None = None,
         format: str | dict | None = None,
+        think: bool | None = None,
     ) -> str:
         """Send a chat request and return the model's response."""
 
         if not messages:
             raise ValueError("Messages cannot be empty.")
-
+        if think is not None and not isinstance(think, bool):
+            raise ValueError("Think must be a boolean or None.")
         for message in messages:
             if (
                 not isinstance(message, dict)
@@ -76,7 +123,8 @@ class OllamaClient:
 
         if format is not None:
             payload["format"] = format
-
+        if think is not None:
+            payload["think"] = think
         request = Request(
             url=f"{self.base_url}/api/chat",
             data=json.dumps(payload).encode("utf-8"),

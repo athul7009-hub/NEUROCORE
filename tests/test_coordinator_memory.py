@@ -1316,3 +1316,162 @@ def test_real_five_memory_workflow_reaches_planning_and_verification(
     # All repositories must remain consistent.
     assert database.check_integrity()
     assert database.check_foreign_key_integrity()
+@pytest.mark.parametrize(
+    ("method_name", "manager_attribute", "manager_method"),
+    [
+        (
+            "validate_semantic_memory",
+            "semantic_memory_manager",
+            "validate",
+        ),
+        (
+            "deprecate_semantic_memory",
+            "semantic_memory_manager",
+            "deprecate",
+        ),
+        (
+            "validate_procedural_memory",
+            "procedural_memory_manager",
+            "validate",
+        ),
+        (
+            "deprecate_procedural_memory",
+            "procedural_memory_manager",
+            "deprecate",
+        ),
+    ],
+)
+def test_memory_lifecycle_methods_use_coordinator_authorization(
+    method_name,
+    manager_attribute,
+    manager_method,
+):
+    coordinator = Coordinator.__new__(Coordinator)
+    manager = Mock()
+    getattr(manager, manager_method).return_value = True
+
+    setattr(coordinator, manager_attribute, manager)
+
+    memory_id = uuid4()
+    result = getattr(coordinator, method_name)(memory_id)
+
+    assert result is True
+    getattr(manager, manager_method).assert_called_once_with(
+        memory_id,
+        requesting_agent="CoordinatorAgent",
+    )
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "trigger_prospective_memory",
+        "complete_prospective_memory",
+        "cancel_prospective_memory",
+        "expire_prospective_memory",
+    ],
+)
+def test_prospective_memory_lifecycle_uses_coordinator_authorization(
+    method_name,
+):
+    coordinator = Coordinator.__new__(Coordinator)
+    manager = Mock()
+    manager_method = getattr(manager, method_name.removesuffix("_prospective_memory"))
+    manager_method.return_value = True
+
+    coordinator.prospective_memory_manager = manager
+
+    memory_id = uuid4()
+    result = getattr(coordinator, method_name)(memory_id)
+
+    assert result is True
+    manager_method.assert_called_once_with(
+        memory_id,
+        requesting_agent="CoordinatorAgent",
+    )
+@pytest.mark.parametrize(
+    ("coordinator_method", "manager_method"),
+    [
+        ("assess_meta_memory", "assess"),
+        ("assess_and_persist_meta_memory", "assess_and_persist"),
+    ],
+)
+def test_meta_memory_assessment_uses_coordinator_authorization(
+    coordinator_method,
+    manager_method,
+):
+    coordinator = Coordinator.__new__(Coordinator)
+    manager = Mock()
+    expected = object()
+    getattr(manager, manager_method).return_value = expected
+
+    coordinator.meta_memory_manager = manager
+
+    meta_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    result = getattr(coordinator, coordinator_method)(meta_id, now=now)
+
+    assert result is expected
+    getattr(manager, manager_method).assert_called_once_with(
+        meta_id,
+        requesting_agent="CoordinatorAgent",
+        now=now,
+    )
+@pytest.mark.parametrize(
+    ("method_name", "manager_method"),
+    [
+        ("confirm_meta_conflict", "confirm"),
+        ("dismiss_meta_conflict", "dismiss"),
+        ("resolve_meta_conflict", "resolve"),
+    ],
+)
+def test_meta_conflict_lifecycle_uses_coordinator_authorization(
+    method_name,
+    manager_method,
+):
+    coordinator = Coordinator.__new__(Coordinator)
+    manager = Mock()
+    getattr(manager, manager_method).return_value = True
+
+    coordinator.meta_conflict_manager = manager
+
+    conflict_id = uuid4()
+    result = getattr(coordinator, method_name)(conflict_id)
+
+    assert result is True
+    getattr(manager, manager_method).assert_called_once_with(
+        conflict_id,
+        requesting_agent="CoordinatorAgent",
+    )
+def test_coordinator_inspects_memory_diagnostics():
+    from unittest.mock import Mock
+
+    from app.agents.coordinator import Coordinator
+
+    diagnostics = Mock()
+    expected_report = Mock()
+    diagnostics.inspect.return_value = expected_report
+
+    coordinator = Coordinator(
+        registry=Mock(),
+        authenticator=Mock(),
+        memory_diagnostics=diagnostics,
+    )
+
+    result = coordinator.inspect_memory_diagnostics()
+
+    assert result is expected_report
+    diagnostics.inspect.assert_called_once_with()
+
+
+def test_coordinator_rejects_unavailable_memory_diagnostics():
+    from unittest.mock import Mock
+
+    from app.agents.coordinator import Coordinator
+
+    coordinator = Coordinator(
+        registry=Mock(),
+        authenticator=Mock(),
+    )
+
+    with pytest.raises(RuntimeError, match="Memory diagnostics are unavailable"):
+        coordinator.inspect_memory_diagnostics()
