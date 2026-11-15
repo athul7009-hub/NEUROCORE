@@ -3,10 +3,13 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.tools.file_scanner import scan_directory, validate_scan_root
-from app.tools.file_hasher import calculate_hash
+from app.tools.file_scanner import (
+    scan_directory,
+    validate_scan_root,
+    is_allowed_cloud_file,
+)
+from app.tools.file_hasher import calculate_hash, UnsafeFileError
 from app.tools.duplicate_detector import find_duplicates
-
-
 def is_approved_directory(directory: Path) -> bool:
     """Check whether a directory is inside an approved root."""
 
@@ -41,24 +44,42 @@ def run_scan(directory: str) -> dict:
             continue
 
         for file in group:
+            file_path = root / file["path"]
+
+            # Avoid reading cloud placeholders, which can trigger hydration.
+            if is_allowed_cloud_file(str(file_path)):
+                hash_skipped.append({
+                    "path": file["path"],
+                    "category": "cloud_placeholder",
+                    "reason": "Cloud Files placeholder was not hashed.",
+                })
+                continue
+
             try:
-                file["sha256"] = calculate_hash(str(root / file["path"]))
+                file["sha256"] = calculate_hash(
+                    str(file_path),
+                    allowed_root=root,
+                )
 
-            except ValueError as error:
+            except UnsafeFileError:
+                category = "unsafe_file"
+                reason = "Unsafe file was not hashed."
+
+            except ValueError:
                 category = "oversized"
-                reason = str(error)
+                reason = "File exceeds the configured hashing size limit."
 
-            except PermissionError as error:
+            except PermissionError:
                 category = "access_denied"
-                reason = str(error)
+                reason = "Permission denied while reading file."
 
-            except FileNotFoundError as error:
+            except FileNotFoundError:
                 category = "missing"
-                reason = str(error)
+                reason = "File disappeared before hashing."
 
-            except OSError as error:
+            except OSError:
                 category = "filesystem_error"
-                reason = str(error)
+                reason = "Filesystem error occurred while hashing file."
 
             else:
                 continue

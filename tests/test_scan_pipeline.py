@@ -2,7 +2,7 @@
 from app.tools.scan_pipeline import run_scan
 from app.core.config import settings
 import pytest
-
+from app.tools.file_hasher import UnsafeFileError
 
 def test_scan_pipeline_finds_duplicates(tmp_path, monkeypatch):
     monkeypatch.setattr(
@@ -60,6 +60,7 @@ def test_scan_report_calculations(tmp_path, monkeypatch):
         (PermissionError("Access denied"), "access_denied"),
         (FileNotFoundError("File missing"), "missing"),
         (OSError("Filesystem issue"), "filesystem_error"),
+        (UnsafeFileError("Unsafe reparse-point file"), "unsafe_file"),
     ],
 )
 def test_hash_errors_are_categorized(
@@ -72,7 +73,7 @@ def test_hash_errors_are_categorized(
     (tmp_path / "first.txt").write_text("NEUROCORE")
     (tmp_path / "second.txt").write_text("NEUROCORE")
 
-    def failing_hash(file_path):
+    def failing_hash(path, *, allowed_root=None):
         raise error
 
     monkeypatch.setattr(
@@ -108,3 +109,53 @@ def test_scan_pipeline_includes_scan_warnings(tmp_path, monkeypatch):
 
     assert len(result["scan_warnings"]) == 1
     assert result["scan_warnings"][0]["category"] == "access_denied"
+
+def test_cloud_placeholder_is_not_hashed(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        settings, "allowed_scan_roots", [str(tmp_path)]
+    )
+
+    files = [
+        {
+            "name": "cloud.txt",
+            "path": "cloud.txt",
+            "extension": ".txt",
+            "size_bytes": 8,
+        },
+        {
+            "name": "local.txt",
+            "path": "local.txt",
+            "extension": ".txt",
+            "size_bytes": 8,
+        },
+    ]
+
+    monkeypatch.setattr(
+        "app.tools.scan_pipeline.scan_directory",
+        lambda directory: (files, []),
+    )
+
+    monkeypatch.setattr(
+        "app.tools.scan_pipeline.is_allowed_cloud_file",
+        lambda path: path.endswith("cloud.txt"),
+    )
+
+    hashed_paths = []
+
+    def fake_hash(path, *, allowed_root=None):
+        hashed_paths.append(path)
+        return "a" * 64
+
+    monkeypatch.setattr(
+        "app.tools.scan_pipeline.calculate_hash",
+        fake_hash,
+    )
+
+    result = run_scan(str(tmp_path))
+
+    assert len(hashed_paths) == 1
+    assert hashed_paths[0].endswith("local.txt")
+
+    assert len(result["hash_skipped"]) == 1
+    assert result["hash_skipped"][0]["category"] == "cloud_placeholder"
+    assert result["hash_skipped"][0]["path"] == "cloud.txt"

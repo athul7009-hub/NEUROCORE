@@ -133,7 +133,7 @@ class ToolRequest(BaseModel):
 
     action_id: UUID = Field(default_factory=uuid4)
 
-    tool_name: str
+    tool_name: str = Field(min_length=1, max_length=100)
     parameters: dict[str, Any] = Field(default_factory=dict)
 
     requires_approval: bool = True

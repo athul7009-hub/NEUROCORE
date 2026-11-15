@@ -71,3 +71,36 @@ def test_inaccessible_directory_is_skipped(tmp_path, monkeypatch):
     assert len(warnings) == 1
     assert warnings[0]["category"] == "access_denied"
     assert warnings[0]["path"] == "blocked"
+
+def test_unsupported_reparse_point_is_skipped(tmp_path, monkeypatch):
+    from app.tools import file_scanner
+
+    unsupported = tmp_path / "unsupported"
+    unsupported.mkdir()
+
+    (unsupported / "secret.txt").write_text("NEUROCORE")
+
+    original_is_reparse_point = file_scanner.is_reparse_point
+
+    def mocked_is_reparse_point(path):
+        if os.fspath(path) == str(unsupported):
+            return True
+
+        return original_is_reparse_point(path)
+
+    monkeypatch.setattr(
+        file_scanner,
+        "is_reparse_point",
+        mocked_is_reparse_point,
+    )
+
+    monkeypatch.setattr(
+        file_scanner,
+        "is_allowed_cloud_directory",
+        lambda path: False,
+    )
+
+    files, warnings = scan_directory(str(tmp_path))
+
+    assert files == []
+    assert warnings == []
