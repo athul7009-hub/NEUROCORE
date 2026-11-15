@@ -45,6 +45,7 @@ from app.tools.tool_executor import ToolExecutor
 
 def create_coordinator(
         tool_executor: ToolExecutor | None = None,
+        database: SQLiteDatabase | None = None,
 ) -> Coordinator:
     """Build and initialize the NEUROCORE application."""
 

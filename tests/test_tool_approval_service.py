@@ -2,11 +2,17 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+from uuid import uuid4
 
 import pytest
 
+from app.memory.database import SQLiteDatabase
 from app.tools.tool_approval_audit import ToolApprovalAudit
 from app.tools.tool_approval_service import ToolApprovalService
+from app.tools.tool_execution_ledger import (
+    ExecutionState,
+    ToolExecutionLedger,
+)
 
 
 class FakeApprovalManager:
@@ -45,7 +51,20 @@ def approval_setup(tmp_path):
     service = ToolApprovalService(manager, audit)
 
     return manager, audit, service
+@pytest.fixture
+def persistent_approval_setup(tmp_path):
+    database = SQLiteDatabase(tmp_path / "test.db")
+    database.initialize()
 
+    ledger = ToolExecutionLedger(database)
+    manager = FakeApprovalManager()
+    audit = ToolApprovalAudit(tmp_path / "persistent_audit.jsonl")
+    service = ToolApprovalService(manager, audit, ledger)
+
+    action_id = uuid4()
+    ledger.register(action_id, "sample", "test-fingerprint")
+
+    return manager, audit, service, ledger, action_id
 
 def read_audit(audit):
     return [
@@ -141,3 +160,150 @@ def test_concurrent_approval_and_rejection_allow_one_decision(
     assert manager.decision in {"approved", "rejected"}
     assert len(records) == 1
     assert records[0]["decision"] == manager.decision
+
+from uuid import UUID
+
+from app.tools.tool_approval_audit import ToolApprovalAudit
+from app.tools.tool_approval_manager import ToolApprovalManager
+from app.tools.tool_execution_ledger import (
+    ExecutionState,
+    ToolExecutionLedger,
+)
+
+
+class ToolApprovalService:
+    """Coordinates audited and persistent approval decisions."""
+
+    def __init__(
+        self,
+        manager: ToolApprovalManager,
+        audit: ToolApprovalAudit,
+        ledger: ToolExecutionLedger | None = None,
+    ):
+        self.manager = manager
+        self.audit = audit
+        self.ledger = ledger
+        self._lock = Lock()
+
+    def approve(self, action_id: UUID) -> None:
+        with self._lock:
+            tool_name = self.manager.get_pending_tool_name(action_id)
+
+            self.audit.record(action_id, tool_name, "approved")
+
+            if self.ledger is not None:
+                if not self.ledger.transition(
+                    action_id,
+                    ExecutionState.PENDING_APPROVAL,
+                    ExecutionState.APPROVED,
+                ):
+                    raise ValueError(
+                        "Persistent approval state transition failed."
+                    )
+
+            try:
+                self.manager.approve(action_id)
+            except Exception:
+                if self.ledger is not None:
+                    self.ledger.transition(
+                        action_id,
+                        ExecutionState.APPROVED,
+                        ExecutionState.PENDING_APPROVAL,
+                    )
+                raise
+
+    def reject(self, action_id: UUID) -> None:
+        with self._lock:
+            tool_name = self.manager.get_pending_tool_name(action_id)
+
+            self.audit.record(action_id, tool_name, "rejected")
+
+            if self.ledger is not None:
+                if not self.ledger.transition(
+                    action_id,
+                    ExecutionState.PENDING_APPROVAL,
+                    ExecutionState.REJECTED,
+                ):
+                    raise ValueError(
+                        "Persistent rejection state transition failed."
+                    )
+
+            try:
+                self.manager.reject(action_id)
+            except Exception:
+                if self.ledger is not None:
+                    self.ledger.transition(
+                        action_id,
+                        ExecutionState.REJECTED,
+                        ExecutionState.PENDING_APPROVAL,
+                    )
+                raise
+def test_approval_persists_state(persistent_approval_setup):
+    manager, audit, service, ledger, action_id = persistent_approval_setup
+
+    service.approve(action_id)
+
+    assert manager.decision == "approved"
+    assert ledger.get_state(action_id) == ExecutionState.APPROVED
+
+
+def test_rejection_persists_state(persistent_approval_setup):
+    manager, audit, service, ledger, action_id = persistent_approval_setup
+
+    service.reject(action_id)
+
+    assert manager.decision == "rejected"
+    assert ledger.get_state(action_id) == ExecutionState.REJECTED
+
+
+def test_failed_persistent_transition_prevents_approval(
+    persistent_approval_setup,
+    monkeypatch,
+):
+    manager, audit, service, ledger, action_id = persistent_approval_setup
+
+    def fail_transition(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(ledger, "transition", fail_transition)
+
+    with pytest.raises(
+        ValueError,
+        match="Persistent approval state transition failed",
+    ):
+        service.approve(action_id)
+
+    assert manager.pending is True
+    assert manager.decision is None
+def test_manager_approval_failure_restores_pending_ledger_state(
+    persistent_approval_setup,
+    monkeypatch,
+):
+    manager, audit, service, ledger, action_id = persistent_approval_setup
+
+    def fail_approval(action_id):
+        raise RuntimeError("Approval failed.")
+
+    monkeypatch.setattr(manager, "approve", fail_approval)
+
+    with pytest.raises(RuntimeError, match="Approval failed"):
+        service.approve(action_id)
+
+    assert ledger.get_state(action_id) == ExecutionState.PENDING_APPROVAL
+
+
+def test_manager_rejection_failure_restores_pending_ledger_state(
+    persistent_approval_setup,
+    monkeypatch,
+):
+    manager, audit, service, ledger, action_id = persistent_approval_setup
+
+    def fail_rejection(action_id):
+        raise RuntimeError("Rejection failed.")
+
+    monkeypatch.setattr(manager, "reject", fail_rejection)
+
+    with pytest.raises(RuntimeError, match="Rejection failed"):
+        service.reject(action_id)
+
+    assert ledger.get_state(action_id) == ExecutionState.PENDING_APPROVAL
