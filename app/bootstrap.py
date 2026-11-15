@@ -49,7 +49,7 @@ def create_coordinator(
 ) -> Coordinator:
     """Build and initialize the NEUROCORE application."""
 
-    database = SQLiteDatabase(settings.database_path)
+    database = database or SQLiteDatabase(settings.database_path)
     memory_diagnostics = MemoryDiagnostics(database)
     database.database_path.parent.mkdir(
         parents=True,

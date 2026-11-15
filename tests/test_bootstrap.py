@@ -19,6 +19,7 @@ from pathlib import Path
 
 from app.core.schemas import MessageType, TaskIntent, TaskRequest
 from app.memory.schemas import MemoryStatus
+from app.memory.database import SQLiteDatabase
 def test_create_coordinator_initializes_application():
     coordinator = create_coordinator()
 
@@ -271,3 +272,14 @@ def test_bootstrapped_coordinator_completes_file_analysis_task(
     assert record is not None
     assert record.status == MemoryStatus.COMPLETED
     assert record.agent_name == "FileAnalysisAgent"
+def test_create_coordinator_uses_supplied_database(tmp_path):
+    database = SQLiteDatabase(tmp_path / "shared.db")
+
+    coordinator = create_coordinator(database=database)
+
+    assert coordinator.memory_manager.repository.database is database
+    assert coordinator.semantic_memory_manager.repository.database is database
+    assert coordinator.procedural_memory_manager.repository.database is database
+    assert coordinator.working_memory_manager.repository.database is database
+    assert coordinator.prospective_memory_manager.repository.database is database
+    assert coordinator.meta_memory_manager.repository.database is database
