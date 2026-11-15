@@ -4,8 +4,6 @@ import json
 from app.agents.coordinator import Coordinator
 from app.runtime import create_runtime
 from app.core.config import settings
-from app.core.schemas import TaskIntent, TaskRequest
-from app.core.schemas import ToolRequest, ToolStatus
 from app.core.schemas import TaskIntent, TaskRequest, ToolRequest, ToolStatus
 import logging
 logger = logging.getLogger(__name__)
@@ -162,3 +160,6 @@ def run_directory_scan(coordinator):
     except Exception:
         logger.exception("Directory scan operation failed.")
         print("Tool operation failed. Check the application logs.")
+
+if __name__ == "__main__":
+    main()

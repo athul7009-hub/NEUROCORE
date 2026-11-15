@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     planning_agent_key: SecretStr = SecretStr("")
     verification_agent_key: SecretStr = SecretStr("")
     app_name: str = "NEUROCORE"
-    app_version: str = "0.1.0"
+    app_version: str = "1.1.0"
     environment: str = "development"
 
     ollama_base_url: str = "http://localhost:11434"
