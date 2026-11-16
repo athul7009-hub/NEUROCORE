@@ -137,6 +137,7 @@ NEUROCORE/
 │   │   ├── prospective/
 │   │   └── ...
 │   ├── tools/
+│   ├── plugins/
 │   ├── bootstrap.py
 │   ├── runtime.py
 │   └── __main__.py
@@ -149,7 +150,7 @@ NEUROCORE/
 └── README.md
 ```
 
-*This is a simplified overview; individual modules and test files are omitted.*
+*This is a simplified overview; individual modules and test files are omitted. The experimental plugin and sandbox files are not part of the verified core release.*
 
 ## Setup
 
@@ -258,15 +259,37 @@ NEUROCORE is designed to avoid unrestricted autonomous execution. Passing a plan
 
 ### Known Platform Limitation
 
-Windows AppContainer integration has encountered a runtime initialization failure (`0xC0000142`, `STATUS_DLL_INIT_FAILED`).
+Windows AppContainer integration has encountered a runtime initialization failure:
+
+```text
+0xC0000142 — STATUS_DLL_INIT_FAILED
+```
 
 The related isolation tests remain skipped. Windows AppContainer isolation is therefore **not verified**.
 
-Plugin execution and external plugin integration remain deferred until the isolation and recovery requirements can be demonstrated reliably. The existing experimental plugin work is not part of the verified core release.
+Plugin execution and external plugin integration remain disabled until the isolation and recovery requirements can be demonstrated reliably.
+
+### V1.2 Plugin Security Status
+
+The experimental plugin and sandbox implementation is preserved, but it is not authorized for execution.
+
+Current safeguards and findings:
+
+- Plugin lifecycle activation rejects enable requests while AppContainer isolation remains unverified.
+- Explicit capability approval is separate from sandbox verification and cannot independently authorize plugin execution.
+- The lifecycle test suite reports **9 passed** after the fail-closed activation change.
+- Static source searches found no direct references from the inspected plugin code to `ToolRegistry` or `ToolExecutor`.
+- A separate static search found no references from application code outside `app/plugins` to `PluginRegistry`, `PluginLifecycleManager`, or `PluginPermissionManager`.
+- These searches did not establish the absence of every possible indirect, dynamic, or runtime integration path.
+- No changes to the core `ToolRegistry`, `ToolExecutor`, or Windows process launcher were justified by the current findings.
+
+Plugin execution must remain disabled until isolation is independently verified and the plugin-to-core boundary, least-privilege permissions, explicit approval, validated execution, and recovery safeguards are demonstrated.
+
+Existing experimental plugin and sandbox files must be preserved during this work.
 
 ## Development Status
 
-**Milestone: V1.1 core implementation and regression validation completed; release preparation in progress.**
+**Milestone: V1.1 core implementation and regression validation completed; V1.2 plugin security boundary review documented, with AppContainer isolation still unverified.**
 
 Implemented areas:
 
@@ -285,11 +308,13 @@ Implemented areas:
 - Command-line workflows.
 - Automated regression testing.
 
-Latest full regression result:
+Latest full V1.1 regression result:
 
 **1,568 passed, 2 skipped, 1 warning.**
 
 The warning originates from a negative test that intentionally supplies an invalid payload to verify rejection behavior. The two skipped tests concern the currently unverified Windows AppContainer integration.
+
+The V1.2 plugin lifecycle validation is separate from that historical full-suite result.
 
 ## Future Development
 
