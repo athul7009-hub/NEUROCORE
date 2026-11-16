@@ -50,7 +50,10 @@ class CommunicationPolicy:
             raise ValueError(
                 "Only the Coordinator may send task requests."
             )
-
+        if message.metadata:
+            raise ValueError(
+                "Task message metadata is not permitted."
+            )
         allowed = self.allowed_fields.get(message.recipient)
 
         if allowed is None:
