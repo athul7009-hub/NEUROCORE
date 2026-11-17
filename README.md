@@ -16,7 +16,8 @@ Unlike a conventional chatbot, NEUROCORE is designed around coordinated agents, 
 - Pydantic and Pydantic Settings
 - SQLite for persistent memory and execution tracking
 - Ollama for local LLM inference
-- Qwen3 8B (default reasoning model)
+- Qwen3 8B for NEUROCORE conversational reasoning (default model)
+- Qwen2.5 7B as the base model for the separate experimental Hermes diagnostic agent
 - Pytest for automated testing
 - Git for version control
 
@@ -62,6 +63,8 @@ Additional memory capabilities include:
 - Reasoning metadata, confidence, and limitations.
 - Runtime integration for coordinating application services.
 - Local chat service integration.
+- Task-complexity-based model routing.
+- Configurable thinking mode for simple, complex, and structured conversational tasks.
 
 ### 4. File Analysis and Controlled Operations
 
@@ -115,6 +118,16 @@ Available operations:
 Planning results require verification. Consequential tool operations require the appropriate approval before execution.
 
 The CLI currently provides focused analysis, scanning, and planning workflows. It is not a general-purpose autonomous desktop assistant.
+
+**Manually verified CLI workflows:**
+
+- Application initialization and clean shutdown.
+- Planning workflow.
+- File Analysis using an explicitly approved test directory.
+- Directory scanning using the same approved directory.
+- Reparse-point paths rejected by security checks.
+
+The File Analysis and Directory Scan workflows were tested against `C:\NEUROCORE_TEST`, containing three files.
 
 ## Project Structure
 
@@ -189,11 +202,19 @@ python -m pip install -r requirements.txt
 
 ### 5. Configure Ollama
 
-Download the default model:
+Download the default NEUROCORE model:
 
 ```powershell
 ollama pull qwen3:8b
 ```
+
+The experimental Hermes diagnostic model uses a separate Ollama model:
+
+```powershell
+ollama pull qwen2.5:7b
+```
+
+Its custom `neurocore-hermes` model is built from the project's Modelfile when that experimental integration is configured.
 
 Ensure Ollama is running and accessible at:
 
@@ -308,13 +329,30 @@ Implemented areas:
 - Command-line workflows.
 - Automated regression testing.
 
-Latest full V1.1 regression result:
+### Regression and Verification Results
+
+Latest full regression result before the final authentication commit:
 
 **1,568 passed, 2 skipped, 1 warning.**
 
 The warning originates from a negative test that intentionally supplies an invalid payload to verify rejection behavior. The two skipped tests concern the currently unverified Windows AppContainer integration.
 
-The V1.2 plugin lifecycle validation is separate from that historical full-suite result.
+The subsequent authentication/replay verification fix was committed separately:
+
+- **Commit:** `080012d`
+- **Message:** `Fix agent authentication replay verification`
+- **Files changed:** 3
+- **Changes:** 119 insertions, 40 deletions.
+
+The authentication/replay fix passed its focused test group:
+
+**112 passed, 1 warning.**
+
+The CLI startup, planning, File Analysis, and directory scanning workflows were also manually verified.
+
+The full regression suite has not yet been rerun after the final authentication commit.
+
+The V1.2 plugin lifecycle validation is separate from the historical full-suite result.
 
 ## Future Development
 
