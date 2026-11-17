@@ -88,7 +88,7 @@ class AgentAuthenticator:
         ).hexdigest()
 
         return unsigned.model_copy(update={"signature": digest})
-    def verify(self, message: AgentMessage) -> bool:
+    def verify_signature(self, message: AgentMessage) -> bool:
         if not isinstance(message, AgentMessage):
             return False
 
@@ -116,10 +116,15 @@ class AgentAuthenticator:
             hashlib.sha256,
         ).hexdigest()
 
-        if not hmac.compare_digest(expected, message.signature):
+        return hmac.compare_digest(expected, message.signature)
+
+    def verify(self, message: AgentMessage) -> bool:
+        if not self.verify_signature(message):
             return False
+
+        now = datetime.now(timezone.utc)
         message_id = str(message.message_id)
-        expires_at = timestamp + self.max_age
+        expires_at = message.created_at + self.max_age
 
         with self._lock:
             expired_ids = [

@@ -63,6 +63,12 @@ class VerificationAgent(BaseAgent):
             if not planning_result.signature:
                 errors.append("Planning response authentication is missing.")
 
+            elif (
+                not self._authenticator
+                or not self._authenticator.verify_signature(planning_result)
+            ):
+                errors.append("Planning response authentication failed.")
+
             if not errors:
                 try:
                     plan = TaskPlan.model_validate(
