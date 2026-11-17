@@ -308,6 +308,17 @@ Plugin execution must remain disabled until isolation is independently verified 
 
 Existing experimental plugin and sandbox files must be preserved during this work.
 
+### Hermes External Plugin Integration
+
+Hermes is the planned external capability provider for NEUROCORE. The intention is to reuse Hermes's existing agent and MCP capabilities through the existing NEUROCORE plugin boundary rather than build a separate plugin framework.
+
+Planned integration:
+- Register Hermes through the existing PluginRegistry and PluginManifest.
+- Reuse existing permission, lifecycle, and IPC components.
+- Route consequential operations through NEUROCORE's Coordinator, authorization, ToolExecutor, approval, audit, and recovery safeguards.
+- Keep Hermes isolated from NEUROCORE's internal memory, credentials, and unrestricted filesystem access.
+
+**Status:** Architecture decision established; adapter not implemented. Plugin execution remains disabled because Windows AppContainer isolation has not been verified. The existing MCP bridge is not yet a secure Hermes plugin integration.
 ## Development Status
 
 **Milestone: V1.1 core implementation and regression validation completed; V1.2 plugin security boundary review documented, with AppContainer isolation still unverified.**
@@ -331,28 +342,17 @@ Implemented areas:
 
 ### Regression and Verification Results
 
-Latest full regression result before the final authentication commit:
+Latest full regression result:
 
-**1,568 passed, 2 skipped, 1 warning.**
+1,568 passed, 2 skipped, 1 warning.
 
-The warning originates from a negative test that intentionally supplies an invalid payload to verify rejection behavior. The two skipped tests concern the currently unverified Windows AppContainer integration.
+The two skipped tests are the opt-in Windows AppContainer integration tests. AppContainer isolation remains unverified because explicitly enabled tests encounter 0xC0000142 (STATUS_DLL_INIT_FAILED).
 
-The subsequent authentication/replay verification fix was committed separately:
+The warning originates from a negative test that intentionally supplies an invalid payload to verify rejection behavior.
 
-- **Commit:** `080012d`
-- **Message:** `Fix agent authentication replay verification`
-- **Files changed:** 3
-- **Changes:** 119 insertions, 40 deletions.
+The regression result includes the authentication and replay-verification fixes.
 
-The authentication/replay fix passed its focused test group:
-
-**112 passed, 1 warning.**
-
-The CLI startup, planning, File Analysis, and directory scanning workflows were also manually verified.
-
-The full regression suite has not yet been rerun after the final authentication commit.
-
-The V1.2 plugin lifecycle validation is separate from the historical full-suite result.
+Plugin execution remains disabled. Passing the standard regression suite does not establish that Windows AppContainer isolation is secure or verified.
 
 ## Future Development
 
