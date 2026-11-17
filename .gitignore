@@ -27,7 +27,10 @@ htmlcov/
 Thumbs.db
 
 # Local runtime data and databases
-data/
+data/*
+!data/notes.md
+!data/sample_report.txt
+!data/sample_report_copy.txt
 *.db
 *.sqlite
 *.sqlite3
